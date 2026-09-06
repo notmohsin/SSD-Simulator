@@ -81,12 +81,12 @@ MAX_PARALLEL=4
 # SWEEP_WORKLOADS: The I/O access patterns to simulate.
 # Options: "read" (Sequential Read), "write" (Sequential Write),
 #          "randread" (Random Read), "randwrite" (Random Write), "randrw" (Mixed Random).
-SWEEP_WORKLOADS=( "read" "write" "randread" "randwrite" "randrw" )
+SWEEP_WORKLOADS=( "randread" "randwrite" "randrw" )
 
 # SWEEP_CMT_BYTES: Capacity of the Cached Mapping Table in bytes.
 # Options: Any integer. Common: 524288 (512KiB), 2097152 (2MiB), 16777216 (16MiB), etc.
 # ponytail: reduced sweep to 2 sizes (256MiB, 1GiB) to finish this year. add more when you have a cluster.
-SWEEP_CMT_BYTES=( 268435456 1073741824 )
+SWEEP_CMT_BYTES=( 16777216 33554431 )
 
 # SWEEP_BLOCK_SIZES: Request size of the host I/O.
 # Options: "4K", "8K", "16K", "32K", "64K", "128K", etc. (Must be multiplier of NAND page).
