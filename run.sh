@@ -30,8 +30,8 @@ CMT_BYTES="${CMT_BYTES:-2097152}"    # CMT size in bytes  (2097152 = 2 MiB)
 FILL_RATIO="${FILL_RATIO:-1.0}"      # warm-up fill level  (0.0 to 1.0)
 EVICT_POLICY="${EVICT_POLICY:-0}"    # GC victim selection: 0=greedy 1=cost-benefit 2=random 3=d-choice
 
-PREFETCH_ENABLE="${PREFETCH_ENABLE:-false}" # CMT spatial prefetch: true | false
-PREFETCH_WINDOW="${PREFETCH_WINDOW:-512}"   # LPNs per translation page (fixed)
+WINDOW_FILL="${WINDOW_FILL:-false}" # CMT spatial prefetch: true | false
+WINDOW_SIZE="${WINDOW_SIZE:-512}"   # LPNs per translation page (fixed)
 
 OUTPUT_DIR="${OUTPUT_DIR:-outputs}"         # directory to write .log files into
 PROGRESS_INTERVAL="${PROGRESS_INTERVAL:-5}" # Live progress update interval in seconds
@@ -64,13 +64,13 @@ SWEEP_BLOCK_SIZES=( "4K" )
 # Options: 0 (LRU - Least Recently Used), 1 (LFU - Least Frequently Used).
 SWEEP_CMT_POLICIES=( 0 1 )
 
-# SWEEP_PREFETCH: Enable or disable spatial prefetching in the CMT.
+# SWEEP_WINDOW_FILL: Enable or disable spatial prefetching in the CMT.
 # Options: "false" (Disabled), "true" (Enabled).
-SWEEP_PREFETCH=( "false" "true" )
+SWEEP_WINDOW_FILL=( "false" "true" )
 
-# SWEEP_PREFETCH_WINDOWS: LPNs to install from one translation-page read.
+# SWEEP_WINDOW_SIZES: LPNs to install from one translation-page read.
 # Fixed at 512 (one mapping page). Do not derive from PAL PageSize.
-SWEEP_PREFETCH_WINDOWS=( 512 )
+SWEEP_WINDOW_SIZES=( 512 )
 
 # SWEEP_FILL_RATIO: The initial capacity utilization of the SSD before the test begins.
 # Options: 0.0 (Empty SSD) to 1.0 (Completely full, forces immediate GC and steady-state).
@@ -135,7 +135,7 @@ mkdir -p "$OUTPUT_DIR"
 
 make_label() {
   local p="LRU"; [ "$4" = "1" ] && p="LFU"
-  local pf="PF_OFF"; [ "$5" = "true" ] && pf="PF_ON_W$6"
+  local pf="WF_OFF"; [ "$5" = "true" ] && pf="WF_ON_W$6"
   local sz="$(( $2 / 1048576 ))MiB"; (( $2 < 1048576 )) && sz="$(( $2 / 1024 ))KiB"
   local w="$1"; [ "$1" = "randrw" ] && w="${1}_mix${10}"
   echo "${w}_${p}_${pf}_${sz}_$3_$9_fill$7_evict$8"
@@ -148,6 +148,11 @@ run_one() {
   local label
   label=$(make_label "$wl" "$cmt_b" "$bs" "$pol" "$pref" "$win" "$fill" "$evict" "$ios" "$rwmix")
   local outfile="$OUTPUT_DIR/${label}.txt"
+
+  # Skip if this simulation was already completed in a previous run
+  if [[ "$SWEEP_MODE" == "true" && -s "$outfile" ]]; then
+    return 0
+  fi
 
   local tmp
   tmp=$(mktemp -d "$SCRIPT_DIR/.sim_tmp_XXXXXX")
@@ -170,8 +175,8 @@ run_one() {
     -e "s|^CMTCapacityBytes *=.*|CMTCapacityBytes = $cmt_b|" \
     -e "s|^CMTCapacityRatio *=.*|CMTCapacityRatio = 0.0|" \
     -e "s|^CMTPolicy *=.*|CMTPolicy = $pol|" \
-    -e "s|^CMTSpatialPrefetch *=.*|CMTSpatialPrefetch = $pref|" \
-    -e "s|^CMTPrefetchWindow *=.*|CMTPrefetchWindow = $win|" \
+    -e "s|^CMTWindowFill *=.*|CMTWindowFill = $pref|" \
+    -e "s|^CMTWindowSize *=.*|CMTWindowSize = $win|" \
     -e "s|^FillRatio *=.*|FillRatio = $fill|" \
     -e "s|^EvictPolicy *=.*|EvictPolicy = $evict|" \
     -e "s|^EnableReadCache *=.*|EnableReadCache = 0|" \
@@ -181,8 +186,8 @@ run_one() {
   if [[ "$SWEEP_MODE" != "true" ]]; then echo "  -> $label"; fi
 
   local summary="$tmp/summary.log"
-  # Run the simulator in the background
-  "$BINARY" "$tmp/standalone.cfg" "$tmp/simplessd.cfg" "$tmp/statprefix" \
+  # Run the simulator in the background at lowest priority to prevent CPU lockouts
+  nice -n 19 "$BINARY" "$tmp/standalone.cfg" "$tmp/simplessd.cfg" "$tmp/statprefix" \
     > "$summary" 2>&1 || true &
   local sim_pid=$!
 
@@ -230,7 +235,7 @@ run_one() {
   rm -rf "$tmp"
 
   local final_hit=$(grep "cmt\.hit_rate" "$outfile" | tail -n1 | awk '{printf "%.2f", $2}' || echo "N/A")
-  local final_acc=$(grep "prefetch_accuracy_percent" "$outfile" | tail -n1 | awk '{printf "%.1f", $2}' || echo "N/A")
+  local final_acc=$(grep "fill_accuracy_percent" "$outfile" | tail -n1 | awk '{printf "%.1f", $2}' || echo "N/A")
 
   if [[ "$SWEEP_MODE" != "true" ]]; then
     if [[ "$final_hit" != "N/A" ]]; then
@@ -242,14 +247,14 @@ run_one() {
 
 # ── Test mode ─────────────────────────────────────────────────────────────────
 # A/B invariants (same CMT size, fill, and I/O size):
-#   sequential read: PF_ON misses drop vs PF_OFF; accuracy should be high
-#   random read:     PF_ON may pollute more; writebacks must not explode
-#   sequential write (fill=1.0): GC misses must not drive prefetch_triggers
+#   sequential read: WF_ON misses drop vs WF_OFF; accuracy should be high
+#   random read:     WF_ON may pollute more; writebacks must not explode
+#   sequential write (fill=1.0): GC misses must not drive fill_triggers
 if [[ "$TEST_MODE" == "true" ]]; then
   echo "SimpleSSD -- PF validation (sequential / random / GC-ish write)"
   echo ""
 
-  TEST_WINDOW="${PREFETCH_WINDOW:-512}"
+  TEST_WINDOW="${WINDOW_SIZE:-512}"
   TEST_CMT="${CMT_BYTES:-2097152}"
   TEST_IOS="${IO_SIZE:-512M}"
 
@@ -265,13 +270,13 @@ if [[ "$TEST_MODE" == "true" ]]; then
   echo ""
   echo "Checking prefetch stat invariants..."
   for f in "$OUTPUT_DIR"/*.txt; do
-    ins=$(awk '/prefetch_insertions/ {print $2}' "$f" | cut -d. -f1)
-    if [[ "$f" == *"PF_OFF"* ]] && (( ins > 0 )); then
-      echo "FAIL: $f (PF_OFF has insertions)"
+    ins=$(awk '/fill_insertions/ {print $2}' "$f" | cut -d. -f1)
+    if [[ "$f" == *"WF_OFF"* ]] && (( ins > 0 )); then
+      echo "FAIL: $f (WF_OFF has insertions)"
     fi
   done
-  seq_off=$(ls "$OUTPUT_DIR"/read_LRU_PF_OFF_*.txt 2>/dev/null | tail -n1 || true)
-  seq_on=$(ls "$OUTPUT_DIR"/read_LRU_PF_ON_*.txt 2>/dev/null | tail -n1 || true)
+  seq_off=$(ls "$OUTPUT_DIR"/read_LRU_WF_OFF_*.txt 2>/dev/null | tail -n1 || true)
+  seq_on=$(ls "$OUTPUT_DIR"/read_LRU_WF_ON_*.txt 2>/dev/null | tail -n1 || true)
   if [[ -n "$seq_off" && -n "$seq_on" ]]; then
     moff=$(awk '/cmt.misses/ {print $2}' "$seq_off" | cut -d. -f1)
     mon=$(awk '/cmt.misses/ {print $2}' "$seq_on" | cut -d. -f1)
@@ -303,8 +308,8 @@ if [[ "$SWEEP_MODE" == "true" ]]; then
           for cmt_b in "${SWEEP_CMT_BYTES[@]}"; do
             for bs in "${SWEEP_BLOCK_SIZES[@]}"; do
               for pol in "${SWEEP_CMT_POLICIES[@]}"; do
-                for pref in "${SWEEP_PREFETCH[@]}"; do
-                  if [[ "$pref" == "false" ]]; then windows=( "${SWEEP_PREFETCH_WINDOWS[0]}" ); else windows=( "${SWEEP_PREFETCH_WINDOWS[@]}" ); fi
+                for pref in "${SWEEP_WINDOW_FILL[@]}"; do
+                  if [[ "$pref" == "false" ]]; then windows=( "${SWEEP_WINDOW_SIZES[0]}" ); else windows=( "${SWEEP_WINDOW_SIZES[@]}" ); fi
                   for win in "${windows[@]}"; do
                     jobs_to_run+=("$wl $cmt_b $bs $pol $pref $win $fill $ios $SWEEP_IO_DEPTH $rwmix $SWEEP_EVICT_POLICY")
                   done
@@ -371,7 +376,7 @@ fi
 echo "SimpleSSD -- single run"
 echo ""
 run_one "$WORKLOAD" "$CMT_BYTES" "$BLOCK_SIZE" "$CMT_POLICY" \
-        "$PREFETCH_ENABLE" "$PREFETCH_WINDOW" "$FILL_RATIO" \
+        "$WINDOW_FILL" "$WINDOW_SIZE" "$FILL_RATIO" \
         "$IO_SIZE" "$IO_DEPTH" "$RW_MIX_READ" "$EVICT_POLICY"
 echo ""
 echo "Done."

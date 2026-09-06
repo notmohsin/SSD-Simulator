@@ -19,13 +19,13 @@ KEY_METRICS = (
     "ftl.page_mapping.cmt.evictions",
     "ftl.page_mapping.cmt.dirty_evictions",
     "ftl.page_mapping.cmt.writebacks",
-    "ftl.page_mapping.cmt.prefetch_insertions",
-    "ftl.page_mapping.cmt.prefetch_hits",
-    "ftl.page_mapping.cmt.prefetch_evicted_unused",
-    "ftl.page_mapping.cmt.prefetch_accuracy_percent",
-    "ftl.page_mapping.cmt.prefetch_pollution_percent",
-    "ftl.page_mapping.cmt.prefetch_coverage_percent",
-    "ftl.page_mapping.cmt.prefetch_avg_batch_size",
+    "ftl.page_mapping.cmt.fill_insertions",
+    "ftl.page_mapping.cmt.fill_hits",
+    "ftl.page_mapping.cmt.fill_evicted_unused",
+    "ftl.page_mapping.cmt.fill_accuracy_percent",
+    "ftl.page_mapping.cmt.fill_waste_rate_percent",
+    "ftl.page_mapping.cmt.fill_coverage_percent",
+    "ftl.page_mapping.cmt.fill_avg_batch_size",
     "pal.energy.total",
     "dram.energy",
     "request_count",
@@ -50,7 +50,7 @@ def parse_name(path):
         "workload": workload,
         "mix": mix,
         "policy": "LFU" if "_LFU_" in name else "LRU" if "_LRU_" in name else "",
-        "prefetch": "ON" if "_PF_ON_" in name else "OFF" if "_PF_OFF_" in name else "",
+        "window_fill": "ON" if "_WF_ON_" in name else "OFF" if "_WF_OFF_" in name else "",
         "cmt": cmt_match.group(1) if cmt_match else "",
         "io_size": io_match.group(1) if io_match else "",
         "block_size": "4K" if "_4K_" in name else "",
@@ -104,7 +104,7 @@ def print_summary(rows, limit):
 
     groups = {}
     for row in rows:
-        key = (row["workload"], row["policy"], row["prefetch"])
+        key = (row["workload"], row["policy"], row["window_fill"])
         groups.setdefault(key, []).append(row)
 
     print("Average by workload / policy / prefetch")
@@ -114,7 +114,7 @@ def print_summary(rows, limit):
             f"{key[0]:<8} {key[1]:<3} PF_{key[2]:<3} "
             f"lat={mean(row['latency_avg_us'] for row in group):8.2f} us "
             f"hit={mean(row['ftl.page_mapping.cmt.hit_rate'] for row in group):6.2f}% "
-            f"pollution={mean(row['ftl.page_mapping.cmt.prefetch_pollution_percent'] for row in group):6.2f}%"
+            f"pollution={mean(row['ftl.page_mapping.cmt.fill_waste_rate_percent'] for row in group):6.2f}%"
         )
 
     print()
