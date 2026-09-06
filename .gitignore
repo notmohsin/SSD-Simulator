@@ -48,3 +48,5 @@ env/
 outputs/
 results/
 .sim_tmp_*/
+.run-build-initialized
+.run-build.lock

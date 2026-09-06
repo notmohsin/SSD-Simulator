@@ -50,7 +50,7 @@ set -euo pipefail
 # SECTION 1: SINGLE-RUN CONFIGURATION
 # -----------------------------------------------------------------------------
 
-WORKLOAD="${WORKLOAD:-randread}"     # randread | randwrite | randrw | read | write
+WORKLOAD="${WORKLOAD:-randwrite}"     # randread | randwrite | randrw | read | write
 IO_SIZE="${IO_SIZE:-64G}"           # total I/O to issue  (e.g. 512M, 2G, 8G)
 BLOCK_SIZE="${BLOCK_SIZE:-4K}"       # request size        (e.g. 4K, 16K, 64K)
 IO_DEPTH="${IO_DEPTH:-32}"           # async queue depth   (1 = synchronous)
@@ -61,7 +61,7 @@ CMT_BYTES="${CMT_BYTES:-2097152}"    # CMT size in bytes  (2097152 = 2 MiB)
 FILL_RATIO="${FILL_RATIO:-1.0}"      # warm-up fill level  (0.0 to 1.0)
 EVICT_POLICY="${EVICT_POLICY:-0}"    # GC victim selection: 0=greedy 1=cost-benefit 2=random 3=d-choice
 
-WINDOW_FILL="${WINDOW_FILL:-false}" # CMT spatial prefetch: true | false
+WINDOW_FILL="${WINDOW_FILL:-true}" # CMT spatial prefetch: true | false
 WINDOW_SIZE="${WINDOW_SIZE:-512}"   # LPNs per translation page (fixed)
 
 OUTPUT_DIR="${OUTPUT_DIR:-outputs}"         # directory to write .log files into
@@ -156,6 +156,23 @@ if [[ "${1:-}" == "clean" ]]; then
 fi
 
 BINARY="$SCRIPT_DIR/simplessd-standalone"
+BUILD_STAMP="$SCRIPT_DIR/.run-build-initialized"
+BUILD_LOCK="$SCRIPT_DIR/.run-build.lock"
+
+exec 9>"$BUILD_LOCK"
+flock -x 9
+if [[ ! -f "$BUILD_STAMP" ]]; then
+  echo "First run: removing the old binary and building SimpleSSD..."
+  rm -f "$BINARY"
+  cmake --build "$SCRIPT_DIR" --target simplessd-standalone
+  [[ -x "$BINARY" ]] || {
+    echo "ERROR: build completed without creating executable: $BINARY"
+    exit 1
+  }
+  printf 'Initialized: %s\n' "$(date)" > "$BUILD_STAMP"
+fi
+flock -u 9
+
 BASE_CFG="$SCRIPT_DIR/config/sample.cfg"
 SSD_CFG="$SCRIPT_DIR/simplessd/config/sample.cfg"
 
