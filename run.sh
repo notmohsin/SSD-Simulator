@@ -20,7 +20,7 @@ set -euo pipefail
 # -----------------------------------------------------------------------------
 
 WORKLOAD="${WORKLOAD:-randread}"     # randread | randwrite | randrw | read | write
-IO_SIZE="${IO_SIZE:-4G}"             # total I/O to issue  (e.g. 512M, 2G, 8G)
+IO_SIZE="${IO_SIZE:-64G}"           # total I/O to issue  (e.g. 512M, 2G, 8G)
 BLOCK_SIZE="${BLOCK_SIZE:-4K}"       # request size        (e.g. 4K, 16K, 64K)
 IO_DEPTH="${IO_DEPTH:-32}"           # async queue depth   (1 = synchronous)
 RW_MIX_READ="${RW_MIX_READ:-0.5}"    # read fraction for randrw (ignored otherwise)
@@ -45,7 +45,7 @@ TEST_MODE="${TEST_MODE:-false}"
 
 # MAX_PARALLEL: Number of simulator instances to run simultaneously.
 # Options: 1 (Sequential), 4-16 (Depending on available CPU cores and RAM).
-MAX_PARALLEL=24
+MAX_PARALLEL= 4
 
 # SWEEP_WORKLOADS: The I/O access patterns to simulate.
 # Options: "read" (Sequential Read), "write" (Sequential Write),
@@ -54,7 +54,8 @@ SWEEP_WORKLOADS=( "read" "write" "randread" "randwrite" "randrw" )
 
 # SWEEP_CMT_BYTES: Capacity of the Cached Mapping Table in bytes.
 # Options: Any integer. Common: 524288 (512KiB), 2097152 (2MiB), 16777216 (16MiB), etc.
-SWEEP_CMT_BYTES=( 67108864 268435456 1073741824 2147483648 )
+# ponytail: reduced sweep to 2 sizes (256MiB, 1GiB) to finish this year. add more when you have a cluster.
+SWEEP_CMT_BYTES=( 268435456 1073741824 )
 
 # SWEEP_BLOCK_SIZES: Request size of the host I/O.
 # Options: "4K", "8K", "16K", "32K", "64K", "128K", etc. (Must be multiplier of NAND page).
@@ -64,7 +65,7 @@ SWEEP_BLOCK_SIZES=( "4K" )
 # Options: 0 (LRU - Least Recently Used), 1 (LFU - Least Frequently Used).
 SWEEP_CMT_POLICIES=( 0 1 )
 
-# SWEEP_WINDOW_FILL: Enable or disable spatial prefetching in the CMT.
+# SWEEP_WINDOW_FILL: Enable or disable spatial reading the full NAND page into the CMT.
 # Options: "false" (Disabled), "true" (Enabled).
 SWEEP_WINDOW_FILL=( "false" "true" )
 
@@ -74,11 +75,12 @@ SWEEP_WINDOW_SIZES=( 512 )
 
 # SWEEP_FILL_RATIO: The initial capacity utilization of the SSD before the test begins.
 # Options: 0.0 (Empty SSD) to 1.0 (Completely full, forces immediate GC and steady-state).
-SWEEP_FILL_RATIOS=( 0.8 1.0 )
+# ponytail: skipped 0.8 fill, testing 1.0 is enough for steady state.
+SWEEP_FILL_RATIOS=( 1.0 )
 
 # SWEEP_IO_SIZES: Total amount of I/O data to issue during the simulation.
 # Options: "1G", "4G", "16G", "64G", etc. Larger sizes ensure steady-state cache behavior.
-SWEEP_IO_SIZES=( "1T" "4T" )
+SWEEP_IO_SIZES=( "64G" )
 
 # SWEEP_IO_DEPTH: Number of outstanding asynchronous I/O requests.
 # Options: 1 (Synchronous), 32 (Standard NVMe), 128 (Heavy enterprise load).
@@ -86,7 +88,8 @@ SWEEP_IO_DEPTH=32
 
 # SWEEP_RW_MIX_READ: Percentage of read operations (only applies if workload is "randrw").
 # Options: 0.0 to 1.0. (e.g., 0.7 = 70% Reads, 30% Writes).
-SWEEP_RW_MIX_READ=( 0.3 0.5 0.7 )
+# ponytail: randrw mixes reduced to just 50/50. add back 0.3/0.7 if specifically needed.
+SWEEP_RW_MIX_READ=( 0.5 )
 
 # SWEEP_EVICT_POLICY: Victim block selection policy for NAND Garbage Collection.
 # Options: 0 (Greedy), 1 (Cost-Benefit), 2 (Random), 3 (d-Choice).
