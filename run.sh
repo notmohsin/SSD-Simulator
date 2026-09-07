@@ -51,17 +51,16 @@ set -euo pipefail
 # -----------------------------------------------------------------------------
 
 WORKLOAD="${WORKLOAD:-randwrite}"     # randread | randwrite | randrw | read | write
-IO_SIZE="${IO_SIZE:-64G}"           # total I/O to issue  (e.g. 512M, 2G, 8G)
+IO_SIZE="${IO_SIZE:-4G}"             # total I/O to issue  (e.g. 512M, 2G, 4G, 8G)
 BLOCK_SIZE="${BLOCK_SIZE:-4K}"       # request size        (e.g. 4K, 16K, 64K)
 IO_DEPTH="${IO_DEPTH:-32}"           # async queue depth   (1 = synchronous)
 RW_MIX_READ="${RW_MIX_READ:-0.5}"    # read fraction for randrw (ignored otherwise)
 
 CMT_POLICY="${CMT_POLICY:-0}"        # 0 = LRU  |  1 = LFU
-CMT_BYTES="${CMT_BYTES:-2097152}"    # CMT size in bytes  (2097152 = 2 MiB)
-FILL_RATIO="${FILL_RATIO:-1.0}"      # warm-up fill level  (0.0 to 1.0)
+CMT_BYTES="${CMT_BYTES:-16777216}"   # CMT size in bytes  (16777216 = 16 MiB)
+FILL_RATIO="${FILL_RATIO:-0.8}"      # warm-up fill level  (0.0 to 1.0)
 EVICT_POLICY="${EVICT_POLICY:-0}"    # GC victim selection: 0=greedy 1=cost-benefit 2=random 3=d-choice
-
-WINDOW_FILL="${WINDOW_FILL:-true}" # CMT spatial prefetch: true | false
+WINDOW_FILL="${WINDOW_FILL:-true}"   # CMT spatial prefetch: true | false
 WINDOW_SIZE="${WINDOW_SIZE:-512}"   # LPNs per translation page (fixed)
 
 OUTPUT_DIR="${OUTPUT_DIR:-outputs}"         # directory to write .log files into
@@ -76,55 +75,70 @@ TEST_MODE="${TEST_MODE:-false}"
 
 # MAX_PARALLEL: Number of simulator instances to run simultaneously.
 # Options: 1 (Sequential), 4-16 (Depending on available CPU cores and RAM).
-MAX_PARALLEL=4
+MAX_PARALLEL="${MAX_PARALLEL:-4}"
 
 # SWEEP_WORKLOADS: The I/O access patterns to simulate.
 # Options: "read" (Sequential Read), "write" (Sequential Write),
 #          "randread" (Random Read), "randwrite" (Random Write), "randrw" (Mixed Random).
-SWEEP_WORKLOADS=( "randread" "randwrite" "randrw" )
+if [[ -z "${SWEEP_WORKLOADS+x}" ]]; then
+  SWEEP_WORKLOADS=( "randread" "randwrite" "randrw" )
+fi
 
 # SWEEP_CMT_BYTES: Capacity of the Cached Mapping Table in bytes.
-# Options: Any integer. Common: 524288 (512KiB), 2097152 (2MiB), 16777216 (16MiB), etc.
-# ponytail: reduced sweep to 2 sizes (256MiB, 1GiB) to finish this year. add more when you have a cluster.
-SWEEP_CMT_BYTES=( 16777216 33554431 )
+# Options: Any integer. Common: 524288 (512KiB), 2097152 (2MiB), 16777216 (16MiB), 33554432 (32MiB).
+if [[ -z "${SWEEP_CMT_BYTES+x}" ]]; then
+  SWEEP_CMT_BYTES=( 16777216 33554432 )
+fi
 
 # SWEEP_BLOCK_SIZES: Request size of the host I/O.
 # Options: "4K", "8K", "16K", "32K", "64K", "128K", etc. (Must be multiplier of NAND page).
-SWEEP_BLOCK_SIZES=( "4K" )
+if [[ -z "${SWEEP_BLOCK_SIZES+x}" ]]; then
+  SWEEP_BLOCK_SIZES=( "4K" )
+fi
 
 # SWEEP_CMT_POLICIES: Eviction policy for the Cached Mapping Table.
 # Options: 0 (LRU - Least Recently Used), 1 (LFU - Least Frequently Used).
-SWEEP_CMT_POLICIES=( 0 1 )
+if [[ -z "${SWEEP_CMT_POLICIES+x}" ]]; then
+  SWEEP_CMT_POLICIES=( 0 1 )
+fi
 
 # SWEEP_WINDOW_FILL: Enable or disable spatial reading the full NAND page into the CMT.
 # Options: "false" (Disabled), "true" (Enabled).
-SWEEP_WINDOW_FILL=( "false" "true" )
+if [[ -z "${SWEEP_WINDOW_FILL+x}" ]]; then
+  SWEEP_WINDOW_FILL=( "false" "true" )
+fi
 
 # SWEEP_WINDOW_SIZES: LPNs to install from one translation-page read.
 # Fixed at 512 (one mapping page). Do not derive from PAL PageSize.
-SWEEP_WINDOW_SIZES=( 512 )
+if [[ -z "${SWEEP_WINDOW_SIZES+x}" ]]; then
+  SWEEP_WINDOW_SIZES=( 512 )
+fi
 
 # SWEEP_FILL_RATIO: The initial capacity utilization of the SSD before the test begins.
 # Options: 0.0 (Empty SSD) to 1.0 (Completely full, forces immediate GC and steady-state).
-# ponytail: skipped 0.8 fill, testing 1.0 is enough for steady state.
-SWEEP_FILL_RATIOS=( 1.0 )
+if [[ -z "${SWEEP_FILL_RATIOS+x}" ]]; then
+  SWEEP_FILL_RATIOS=( 0.8 )
+fi
 
 # SWEEP_IO_SIZES: Total amount of I/O data to issue during the simulation.
 # Options: "1G", "4G", "16G", "64G", etc. Larger sizes ensure steady-state cache behavior.
-SWEEP_IO_SIZES=( "64G" )
+if [[ -z "${SWEEP_IO_SIZES+x}" ]]; then
+  SWEEP_IO_SIZES=( "4G" )
+fi
 
 # SWEEP_IO_DEPTH: Number of outstanding asynchronous I/O requests.
 # Options: 1 (Synchronous), 32 (Standard NVMe), 128 (Heavy enterprise load).
-SWEEP_IO_DEPTH=32
+SWEEP_IO_DEPTH="${SWEEP_IO_DEPTH:-32}"
 
 # SWEEP_RW_MIX_READ: Percentage of read operations (only applies if workload is "randrw").
 # Options: 0.0 to 1.0. (e.g., 0.7 = 70% Reads, 30% Writes).
-# ponytail: randrw mixes reduced to just 50/50. add back 0.3/0.7 if specifically needed.
-SWEEP_RW_MIX_READ=( 0.5 )
+if [[ -z "${SWEEP_RW_MIX_READ+x}" ]]; then
+  SWEEP_RW_MIX_READ=( 0.5 )
+fi
 
 # SWEEP_EVICT_POLICY: Victim block selection policy for NAND Garbage Collection.
 # Options: 0 (Greedy), 1 (Cost-Benefit), 2 (Random), 3 (d-Choice).
-SWEEP_EVICT_POLICY=0
+SWEEP_EVICT_POLICY="${SWEEP_EVICT_POLICY:-0}"
 
 # -----------------------------------------------------------------------------
 # SECTION 3: RUN LOGIC
@@ -164,7 +178,14 @@ flock -x 9
 if [[ ! -f "$BUILD_STAMP" ]]; then
   echo "First run: removing the old binary and building SimpleSSD..."
   rm -f "$BINARY"
-  cmake --build "$SCRIPT_DIR" --target simplessd-standalone
+  BUILD_DIR="$SCRIPT_DIR"
+  if [[ -f "$SCRIPT_DIR/build/CMakeCache.txt" ]]; then
+    BUILD_DIR="$SCRIPT_DIR/build"
+  fi
+  cmake --build "$BUILD_DIR" --target simplessd-standalone
+  if [[ "$BUILD_DIR" != "$SCRIPT_DIR" && -f "$BUILD_DIR/simplessd-standalone" ]]; then
+    cp "$BUILD_DIR/simplessd-standalone" "$BINARY"
+  fi
   [[ -x "$BINARY" ]] || {
     echo "ERROR: build completed without creating executable: $BINARY"
     exit 1
@@ -227,7 +248,7 @@ run_one() {
     "$BASE_CFG" > "$tmp/standalone.cfg"
 
   sed \
-    -e "s|^Block *=.*|Block = 2048|" \
+    -e "s|^Block *=.*|Block = 512|" \
     -e "s|^CMTCapacityBytes *=.*|CMTCapacityBytes = $cmt_b|" \
     -e "s|^CMTCapacityRatio *=.*|CMTCapacityRatio = 0.0|" \
     -e "s|^CMTPolicy *=.*|CMTPolicy = $pol|" \
@@ -466,14 +487,31 @@ if [[ "$SWEEP_MODE" == "true" ]]; then
   ) &
   POLLER_PID=$!
 
+  workers=()
   for job_args in "${jobs_to_run[@]}"; do
-    while (( $(jobs -p | wc -l) >= MAX_PARALLEL + 1 )); do sleep 0.5; done
+    if (( ${#workers[@]} >= MAX_PARALLEL )); then
+      wait -n "${workers[@]}" 2>/dev/null || true
+      alive=()
+      for pid in "${workers[@]}"; do
+        if kill -0 "$pid" 2>/dev/null; then
+          alive+=("$pid")
+        fi
+      done
+      workers=("${alive[@]}")
+    fi
     # shellcheck disable=SC2086
     run_one $job_args &
+    workers+=("$!")
   done
 
-  wait $POLLER_PID
-  wait
+  # Wait for all remaining worker simulations to finish
+  if (( ${#workers[@]} > 0 )); then
+    wait "${workers[@]}" 2>/dev/null || true
+  fi
+
+  # Terminate and wait for progress poller
+  kill "$POLLER_PID" 2>/dev/null || true
+  wait "$POLLER_PID" 2>/dev/null || true
 
   # Write the sweep totals footer
   SWEEP_END_TIME=$(date +%s)
