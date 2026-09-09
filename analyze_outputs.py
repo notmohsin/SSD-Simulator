@@ -107,11 +107,11 @@ def print_summary(rows, limit):
         key = (row["workload"], row["policy"], row["window_fill"])
         groups.setdefault(key, []).append(row)
 
-    print("Average by workload / policy / prefetch")
+    print("Average by workload / policy / window fill")
     for key in sorted(groups):
         group = groups[key]
         print(
-            f"{key[0]:<8} {key[1]:<3} PF_{key[2]:<3} "
+            f"{key[0]:<8} {key[1]:<3} WF_{key[2]:<3} "
             f"lat={mean(row['latency_avg_us'] for row in group):8.2f} us "
             f"hit={mean(row['ftl.page_mapping.cmt.hit_rate'] for row in group):6.2f}% "
             f"pollution={mean(row['ftl.page_mapping.cmt.fill_waste_rate_percent'] for row in group):6.2f}%"
@@ -135,7 +135,7 @@ def format_run(row):
     mix = row["mix"] or "-"
     return (
         f"{float(row['latency_avg_us']):9.2f} us | "
-        f"{row['workload']:<8} mix={mix:<3} {row['policy']:<3} PF_{row['prefetch']:<3} "
+        f"{row['workload']:<8} mix={mix:<3} {row['policy']:<3} WF_{row['window_fill']:<3} "
         f"cmt={row['cmt']:<6} io={row['io_size']:<3} "
         f"hit={float(row['ftl.page_mapping.cmt.hit_rate']):6.2f}% "
         f"file={row['file']}"

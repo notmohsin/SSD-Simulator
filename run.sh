@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 # =============================================================================
-# run.sh -- SimpleSSD CMT Prefetch Experiment Runner
+# run.sh -- SimpleSSD CMT Window-Fill Experiment Runner
 #
 # USAGE
 #   bash run.sh                  # single run with settings from SECTION 1
-#   TEST_MODE=true bash run.sh   # prefetch validation test (sequential read)
+#   TEST_MODE=true bash run.sh   # window-fill validation test (sequential read)
 #   SWEEP_MODE=true bash run.sh  # sweep all combinations from SECTION 2
 #   bash run.sh kill             # forcefully terminate all running simulations
 #   bash run.sh clean            # remove all orphaned .sim_tmp_ directories
 #
 # OUTPUT
 #   outputs/<label>.txt   -- full subsystem stats + run summary
+#   Sweep runtime planning: ../tutorial/10_Sweep_Runtime_Estimates.md
+#   Window-fill naming:     ../tutorial/11_CMT_Window_Fill_Nomenclature.md
 # =============================================================================
 
 set -euo pipefail
@@ -42,7 +44,7 @@ set -euo pipefail
 #                    - 17179869184 (16GB)   -> 100% maps a 16TB SSD
 # FILL_RATIO       : Float between 0.0 and 1.0 (SSD warm-up fill level)
 # EVICT_POLICY     : 0 (Greedy), 1 (Cost-Benefit), 2 (Random), 3 (D-Choice)
-# WINDOW_FILL      : "true" (Enable spatial prefetching), "false"
+# WINDOW_FILL      : "true" (enable CMT window fill), "false"
 # WINDOW_SIZE      : Integer (LPNs per translation page, typically 512)
 # -----------------------------------------------------------------------------
 
@@ -60,7 +62,7 @@ CMT_POLICY="${CMT_POLICY:-0}"        # 0 = LRU  |  1 = LFU
 CMT_BYTES="${CMT_BYTES:-16777216}"   # CMT size in bytes  (16777216 = 16 MiB)
 FILL_RATIO="${FILL_RATIO:-0.8}"      # warm-up fill level  (0.0 to 1.0)
 EVICT_POLICY="${EVICT_POLICY:-0}"    # GC victim selection: 0=greedy 1=cost-benefit 2=random 3=d-choice
-WINDOW_FILL="${WINDOW_FILL:-true}"   # CMT spatial prefetch: true | false
+WINDOW_FILL="${WINDOW_FILL:-true}"   # CMT window fill: true | false
 WINDOW_SIZE="${WINDOW_SIZE:-512}"   # LPNs per translation page (fixed)
 
 OUTPUT_DIR="${OUTPUT_DIR:-outputs}"         # directory to write .log files into
@@ -102,7 +104,7 @@ if [[ -z "${SWEEP_CMT_POLICIES+x}" ]]; then
   SWEEP_CMT_POLICIES=( 0 1 )
 fi
 
-# SWEEP_WINDOW_FILL: Enable or disable spatial reading the full NAND page into the CMT.
+# SWEEP_WINDOW_FILL: Enable or disable CMT window fill on a demand miss.
 # Options: "false" (Disabled), "true" (Enabled).
 if [[ -z "${SWEEP_WINDOW_FILL+x}" ]]; then
   SWEEP_WINDOW_FILL=( "false" "true" )
@@ -225,8 +227,8 @@ run_one() {
   if [[ "$SWEEP_MODE" == "true" && -s "$outfile" ]]; then
     if [[ -n "${SWEEP_SUMMARY_FILE:-}" ]]; then
       flock "$SWEEP_SUMMARY_FILE" \
-        printf "%-70s  %7s  %12s  %8s  %7s  %s\n" \
-        "$label" "-" "-" "-" "-" "SKIPPED" >> "$SWEEP_SUMMARY_FILE"
+        printf "%-70s  %7s  %8s  %7s  %s\n" \
+        "$label" "-" "-" "-" "SKIPPED" >> "$SWEEP_SUMMARY_FILE"
     fi
     return 0
   fi
@@ -263,7 +265,7 @@ run_one() {
   if [[ "$SWEEP_MODE" != "true" ]]; then echo "  -> $label"; fi
 
   local summary="$tmp/summary.log"
-  local start_time end_time elapsed_s peak_ram_mib=0
+  local start_time end_time elapsed_s
 
   # Run the simulator in the background at lowest priority to prevent CPU lockouts
   nice -n 19 "$BINARY" "$tmp/standalone.cfg" "$tmp/simplessd.cfg" "$tmp/statprefix" \
@@ -271,28 +273,9 @@ run_one() {
   local sim_pid=$!
   start_time=$(date +%s)
 
-  # Poll /proc/<pid>/status every 1 second to track peak RAM (VmRSS in kB)
-  (
-    max_rss=0
-    while kill -0 "$sim_pid" 2>/dev/null; do
-      rss=$(awk '/VmRSS/{print $2}' "/proc/$sim_pid/status" 2>/dev/null || echo 0)
-      (( rss > max_rss )) && max_rss=$rss
-      sleep 1
-    done
-    echo "$max_rss" > "$tmp/peak_rss_kb"
-  ) &
-  local ram_poller_pid=$!
-
   wait "$sim_pid"
   end_time=$(date +%s)
   elapsed_s=$(( end_time - start_time ))
-
-  wait "$ram_poller_pid" 2>/dev/null || true
-  if [[ -f "$tmp/peak_rss_kb" ]]; then
-    local peak_kb
-    peak_kb=$(cat "$tmp/peak_rss_kb")
-    peak_ram_mib=$(awk -v kb="${peak_kb:-0}" 'BEGIN {printf "%.1f", kb/1024}')
-  fi
 
   {
     echo "=== SimpleSSD Simulation ==="
@@ -304,11 +287,11 @@ run_one() {
     echo "Block Size      : $bs"
     echo "CMT Policy      : $( [ "$pol" = "0" ] && echo "LRU" || echo "LFU" )"
     echo "CMT Capacity    : $cmt_b Bytes"
-    echo "Spatial Prefetch: $( [ "$pref" = "true" ] && echo "ON" || echo "OFF" )"
+    echo "Window Fill     : $( [ "$pref" = "true" ] && echo "ON" || echo "OFF" )"
     if [ "$pref" = "true" ]; then
-      echo "Prefetch Window : $win"
+      echo "Window Size     : $win"
     else
-      echo "Prefetch Window : N/A"
+      echo "Window Size     : N/A"
     fi
     echo "Eviction Policy : $evict"
     echo "Fill Ratio      : $fill"
@@ -316,7 +299,6 @@ run_one() {
     echo ""
     echo "--- Performance ---"
     printf  "Wall Time       : %dm %02ds\n" $((elapsed_s/60)) $((elapsed_s%60))
-    echo "Peak RAM        : ${peak_ram_mib} MiB"
     echo ""
     echo "=== SUBSYSTEM STATS ==="
     if [[ -f "$statsfile" && -s "$statsfile" ]]; then
@@ -345,14 +327,14 @@ run_one() {
   if [[ -n "${SWEEP_SUMMARY_FILE:-}" ]]; then
     elapsed_fmt=$(printf "%dm%02ds" $((elapsed_s/60)) $((elapsed_s%60)))
     flock "$SWEEP_SUMMARY_FILE" \
-      printf "%-70s  %7s  %12s  %8s  %7s  %s\n" \
-      "$label" "$elapsed_fmt" "${peak_ram_mib} MiB" "${final_hit}%" "${final_acc}%" "DONE" \
+      printf "%-70s  %7s  %8s  %7s  %s\n" \
+      "$label" "$elapsed_fmt" "${final_hit}%" "${final_acc}%" "DONE" \
       >> "$SWEEP_SUMMARY_FILE"
   fi
 
   if [[ "$SWEEP_MODE" != "true" ]]; then
     if [[ "$final_hit" != "N/A" ]]; then
-      printf "     CMT hit rate: %s%%   prefetch accuracy: %s%%\n" "$final_hit" "$final_acc"
+      printf "     CMT hit rate: %s%%   window-fill accuracy: %s%%\n" "$final_hit" "$final_acc"
     fi
     echo "     Log: $outfile"
   fi
@@ -381,7 +363,7 @@ if [[ "$TEST_MODE" == "true" ]]; then
   run_one "write"    "$TEST_CMT" "4K" "0" "true"  "$TEST_WINDOW" "1.0" "$TEST_IOS" "32" "0.5" "0"
 
   echo ""
-  echo "Checking prefetch stat invariants..."
+  echo "Checking window-fill stat invariants..."
   for f in "$OUTPUT_DIR"/*.txt; do
     ins=$(awk '/fill_insertions/ {print $2}' "$f" | cut -d. -f1)
     if [[ "$f" == *"WF_OFF"* ]] && (( ins > 0 )); then
@@ -449,8 +431,8 @@ if [[ "$SWEEP_MODE" == "true" ]]; then
     echo "Output Dir : $OUTPUT_DIR"
     echo "Total Jobs : $TOTAL_JOBS"
     echo ""
-    printf "%-70s  %7s  %12s  %8s  %7s  %s\n" \
-      "Label" "Time" "Peak RAM" "CMT Hit%" "PF Acc%" "Status"
+    printf "%-70s  %7s  %8s  %7s  %s\n" \
+      "Label" "Time" "CMT Hit%" "Fill Acc%" "Status"
     printf '%s\n' "$(printf '%.0s-' {1..120})"
   } > "$SWEEP_SUMMARY_FILE"
 
@@ -519,9 +501,6 @@ if [[ "$SWEEP_MODE" == "true" ]]; then
   DONE_COUNT=$(grep -c " DONE$" "$SWEEP_SUMMARY_FILE" || echo 0)
   SKIP_COUNT=$(grep -c " SKIPPED$" "$SWEEP_SUMMARY_FILE" || echo 0)
   FAIL_COUNT=$(( TOTAL_JOBS - DONE_COUNT - SKIP_COUNT ))
-  PEAK_RAM_JOB=$(grep " DONE$" "$SWEEP_SUMMARY_FILE" | awk '{print $(NF-3), $0}' | sort -rn | head -1 | cut -d' ' -f2-)
-  PEAK_RAM_VAL=$(grep " DONE$" "$SWEEP_SUMMARY_FILE" | awk '{print $(NF-3)}' | sort -rn | head -1)
-  AVG_RAM=$(grep " DONE$" "$SWEEP_SUMMARY_FILE" | awk '{sum+=$(NF-3); n++} END {if(n>0) printf "%.1f", sum/n; else print "N/A"}')
   SLOWEST=$(grep " DONE$" "$SWEEP_SUMMARY_FILE" | awk 'BEGIN{max=0} {split($2,a,"m"); s=a[1]*60+a[2]; if(s>max){max=s; line=$0}} END{print line}')
   FASTEST=$(grep " DONE$" "$SWEEP_SUMMARY_FILE" | awk 'BEGIN{min=999999} {split($2,a,"m"); s=a[1]*60+a[2]; if(s<min){min=s; line=$0}} END{print line}')
   CPU_HOURS=$(grep " DONE$" "$SWEEP_SUMMARY_FILE" | awk '{split($2,a,"m"); s=a[1]*60+a[2]; sum+=s} END {printf "%.1f", sum/3600}')
@@ -533,8 +512,6 @@ if [[ "$SWEEP_MODE" == "true" ]]; then
     printf "Wall Time   : %dh %02dm %02ds\n" $((SWEEP_ELAPSED/3600)) $(( (SWEEP_ELAPSED%3600)/60 )) $((SWEEP_ELAPSED%60))
     echo "Total Jobs  : $TOTAL_JOBS  ($DONE_COUNT done, $SKIP_COUNT skipped, $FAIL_COUNT failed)"
     echo "CPU-Hours   : $CPU_HOURS"
-    echo "Peak RAM    : ${PEAK_RAM_VAL} MiB"
-    echo "Avg RAM     : ${AVG_RAM} MiB"
     echo "Slowest Job : $(echo "$SLOWEST" | awk '{print $1, $2}')"
     echo "Fastest Job : $(echo "$FASTEST" | awk '{print $1, $2}')"
     echo "================================"
