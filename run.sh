@@ -224,7 +224,7 @@ run_one() {
   local outfile="$OUTPUT_DIR/${label}.txt"
 
   # Skip if this simulation was already completed in a previous run
-  if [[ "$SWEEP_MODE" == "true" && -s "$outfile" ]]; then
+  if [[ "$SWEEP_MODE" == "true" && -s "$outfile" && -n "$(grep "cmt\.hit_rate" "$outfile" 2>/dev/null)" ]]; then
     if [[ -n "${SWEEP_SUMMARY_FILE:-}" ]]; then
       flock "$SWEEP_SUMMARY_FILE" \
         printf "%-70s  %7s  %8s  %7s  %s\n" \
@@ -269,11 +269,12 @@ run_one() {
 
   # Run the simulator in the background at lowest priority to prevent CPU lockouts
   nice -n 19 "$BINARY" "$tmp/standalone.cfg" "$tmp/simplessd.cfg" "$tmp/statprefix" \
-    > "$summary" 2>&1 || true &
+    > "$summary" 2>&1 &
   local sim_pid=$!
   start_time=$(date +%s)
 
-  wait "$sim_pid"
+  local sim_status=0
+  wait "$sim_pid" || sim_status=$?
   end_time=$(date +%s)
   elapsed_s=$(( end_time - start_time ))
 
@@ -320,19 +321,28 @@ run_one() {
   rm -rf "$tmp"
 
   local final_hit final_acc elapsed_fmt
-  final_hit=$(grep "cmt\.hit_rate" "$outfile" | tail -n1 | awk '{printf "%.2f", $2}' || echo "N/A")
-  final_acc=$(grep "fill_accuracy_percent" "$outfile" | tail -n1 | awk '{printf "%.1f", $2}' || echo "N/A")
+  final_hit=$(grep "cmt\.hit_rate" "$outfile" 2>/dev/null | tail -n1 | awk '{printf "%.2f", $2}' || true)
+  final_acc=$(grep "fill_accuracy_percent" "$outfile" 2>/dev/null | tail -n1 | awk '{printf "%.1f", $2}' || true)
+
+  local job_status="DONE"
+  if [[ $sim_status -ne 0 || -z "$final_hit" || "$final_hit" == "N/A" ]]; then
+    job_status="FAILED"
+    final_hit="${final_hit:-N/A}"
+    final_acc="${final_acc:-N/A}"
+  fi
 
   # Append one row to the sweep summary (flock for safe concurrent writes from parallel jobs)
   if [[ -n "${SWEEP_SUMMARY_FILE:-}" ]]; then
     elapsed_fmt=$(printf "%dm%02ds" $((elapsed_s/60)) $((elapsed_s%60)))
     flock "$SWEEP_SUMMARY_FILE" \
       printf "%-70s  %7s  %8s  %7s  %s\n" \
-      "$label" "$elapsed_fmt" "${final_hit}%" "${final_acc}%" "DONE" \
+      "$label" "$elapsed_fmt" "${final_hit}%" "${final_acc}%" "$job_status" \
       >> "$SWEEP_SUMMARY_FILE"
   fi
 
-  if [[ "$SWEEP_MODE" != "true" ]]; then
+  if [[ "$job_status" == "FAILED" ]]; then
+    echo "  [ERROR] Simulation failed for $label (exit code $sim_status). Log: $outfile"
+  elif [[ "$SWEEP_MODE" != "true" ]]; then
     if [[ "$final_hit" != "N/A" ]]; then
       printf "     CMT hit rate: %s%%   window-fill accuracy: %s%%\n" "$final_hit" "$final_acc"
     fi

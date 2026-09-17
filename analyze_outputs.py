@@ -8,8 +8,7 @@ from pathlib import Path
 
 
 LATENCY_RE = re.compile(r"Latency \(([^)]+)\): .*avg=([0-9.]+)")
-CMT_RE = re.compile(r"_(512KiB|[0-9]+MiB)_4K_")
-IO_RE = re.compile(r"_4K_([0-9]+G)_")
+DIM_RE = re.compile(r"_([0-9]+(?:KiB|MiB|GiB))_([0-9]+[KMG])_([0-9]+[KMG])_fill([0-9.]+)")
 MIX_RE = re.compile(r"mix([0-9.]+)")
 
 KEY_METRICS = (
@@ -42,8 +41,7 @@ def parse_name(path):
         mix = match.group(1) if match else ""
         workload = "randrw"
 
-    cmt_match = CMT_RE.search(name)
-    io_match = IO_RE.search(name)
+    dim_match = DIM_RE.search(name)
 
     return {
         "file": path.name,
@@ -51,9 +49,9 @@ def parse_name(path):
         "mix": mix,
         "policy": "LFU" if "_LFU_" in name else "LRU" if "_LRU_" in name else "",
         "window_fill": "ON" if "_WF_ON_" in name else "OFF" if "_WF_OFF_" in name else "",
-        "cmt": cmt_match.group(1) if cmt_match else "",
-        "io_size": io_match.group(1) if io_match else "",
-        "block_size": "4K" if "_4K_" in name else "",
+        "cmt": dim_match.group(1) if dim_match else "",
+        "block_size": dim_match.group(2) if dim_match else "",
+        "io_size": dim_match.group(3) if dim_match else "",
     }
 
 
@@ -73,6 +71,27 @@ def parse_log(path):
 
     with path.open(encoding="utf-8", errors="ignore") as stream:
         for line in stream:
+            # Fallback extraction from configuration section if filename was non-standard
+            if not row["cmt"] and "CMT Capacity" in line:
+                parts = line.split(":")
+                if len(parts) >= 2:
+                    try:
+                        bytes_val = int(parts[1].replace("Bytes", "").strip())
+                        if bytes_val >= 1048576:
+                            row["cmt"] = f"{bytes_val // 1048576}MiB"
+                        else:
+                            row["cmt"] = f"{bytes_val // 1024}KiB"
+                    except ValueError:
+                        pass
+            if not row["block_size"] and "Block Size" in line:
+                parts = line.split(":")
+                if len(parts) >= 2:
+                    row["block_size"] = parts[1].strip()
+            if not row["io_size"] and "IO Size" in line:
+                parts = line.split(":")
+                if len(parts) >= 2:
+                    row["io_size"] = parts[1].strip()
+
             fields = line.split()
             if len(fields) >= 2:
                 try:
