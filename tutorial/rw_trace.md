@@ -8,7 +8,7 @@ This document traces a single **READ** and a single **WRITE** request through ev
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  sim/main.cc  ─  Simulation engine & event loop                │
+│  sim/main.cc  ─  Simulation engine & event loop                 │
 └───────────────────────────┬─────────────────────────────────────┘
                             │  creates
         ┌───────────────────┴───────────────────┐
