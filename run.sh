@@ -62,7 +62,7 @@ CMT_POLICY="${CMT_POLICY:-0}"        # 0 = LRU  |  1 = LFU
 CMT_BYTES="${CMT_BYTES:-16777216}"   # CMT size in bytes  (16777216 = 16 MiB)
 FILL_RATIO="${FILL_RATIO:-0.8}"      # warm-up fill level  (0.0 to 1.0)
 EVICT_POLICY="${EVICT_POLICY:-0}"    # GC victim selection: 0=greedy 1=cost-benefit 2=random 3=d-choice
-WINDOW_FILL="${WINDOW_FILL:-true}"   # CMT window fill: true | false
+WINDOW_FILL="${WINDOW_FILL:-false}"   # CMT window fill: true | false (off by default; random I/O cannot use spatial fill)
 WINDOW_SIZE="${WINDOW_SIZE:-512}"   # LPNs per translation page (fixed)
 
 OUTPUT_DIR="${OUTPUT_DIR:-outputs}"         # directory to write .log files into
@@ -106,8 +106,10 @@ fi
 
 # SWEEP_WINDOW_FILL: Enable or disable CMT window fill on a demand miss.
 # Options: "false" (Disabled), "true" (Enabled).
+# Default sweep is policy/capacity on random I/O with window-fill OFF.
+# Enable WF_ON only for sequential/strided jobs (see TEST_MODE), not rand*.
 if [[ -z "${SWEEP_WINDOW_FILL+x}" ]]; then
-  SWEEP_WINDOW_FILL=( "false" "true" )
+  SWEEP_WINDOW_FILL=( "false" )
 fi
 
 # SWEEP_WINDOW_SIZES: LPNs to install from one translation-page read.

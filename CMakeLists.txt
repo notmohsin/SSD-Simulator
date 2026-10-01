@@ -146,3 +146,8 @@ add_executable(simplessd-standalone
   ${SRC_UTIL}
 )
 target_link_libraries(simplessd-standalone simplessd)
+
+add_executable(cmt_fill_budget_test tests/cmt_fill_budget_test.cc)
+target_include_directories(cmt_fill_budget_test PRIVATE
+  ${PROJECT_SOURCE_DIR}/simplessd
+)
