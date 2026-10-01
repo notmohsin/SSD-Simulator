@@ -2,6 +2,8 @@
 CMakeFiles/
 *.cmake
 CMakeCache.txt
+build*/
+Testing/
 
 # SimpleSSD output
 libsimplessd.a
@@ -50,3 +52,7 @@ results/
 .sim_tmp_*/
 .run-build-initialized
 .run-build.lock
+
+# Local migration artifacts
+*-migration-backup/
+*-subtree-attempt/

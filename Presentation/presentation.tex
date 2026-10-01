@@ -1,0 +1,392 @@
+\documentclass[10pt]{article}
+
+\usepackage[
+  paperwidth=16cm,
+  paperheight=9cm,
+  margin=0cm
+]{geometry}
+\usepackage[table]{xcolor}
+\usepackage{array}
+\usepackage{microtype}
+\usepackage{url}
+
+\pagestyle{empty}
+\setlength{\parindent}{0pt}
+\setlength{\fboxrule}{0.35pt}
+
+\definecolor{Carbon}{HTML}{0A0A0A}
+\definecolor{Cream}{HTML}{FCFCFC}
+\definecolor{MutedGold}{HTML}{A16207}
+\definecolor{SlateGrey}{HTML}{444444}
+\definecolor{DeepGrey}{HTML}{151515}
+\definecolor{SoftGrey}{HTML}{B8B8B8}
+
+\newcounter{slideno}
+\newcommand{\presenter}{Sheikh Mohsin Shafi}
+\newcommand{\slidefooter}[1]{%
+  \vfill
+  {\color{MutedGold}\small\hfill #1\,/\,\pageref{LastSlide}}%
+}
+
+% ── Slide types ────────────────────────────────────────────────
+\newcommand{\titleslide}{%
+  \stepcounter{slideno}
+  \pagecolor{Carbon}
+  \color{Cream}
+  \begin{minipage}[t][8.72cm][c]{16cm}
+    \hspace*{1.05cm}
+    \begin{minipage}{13.9cm}
+      {\color{MutedGold}\Large Final Internship Presentation}
+
+      \vspace{0.45cm}
+      {\Huge\bfseries Into the Flash}
+
+      \vspace{0.35cm}
+      {\large\itshape SSD Systems Research}
+
+      \vspace{0.65cm}
+      {\color{SlateGrey}\large SIP 2026 \quad | \quad \presenter}
+
+      \vspace{0.9cm}
+      {\color{SlateGrey}\rule{5.4cm}{0.4pt}}
+
+      \vspace{0.55cm}
+      {\color{SlateGrey}Under the guidance of Prof. TV Kalyan \& Waqar Hassan Mir}
+
+      \vspace{0.75cm}
+      {\color{MutedGold}\small FLAME University}
+    \end{minipage}
+  \end{minipage}
+  \newpage
+}
+
+\newcommand{\sectionslide}[2]{%
+  \stepcounter{slideno}
+  \begin{minipage}[t][8.72cm][c]{16cm}
+    \hspace*{1.05cm}
+    \begin{minipage}{13.9cm}
+      {\color{MutedGold}\Large #1}
+
+      \vspace{0.45cm}
+      {\Huge\bfseries #2}
+
+      \vspace{0.65cm}
+      {\color{SlateGrey}\rule{4.2cm}{0.4pt}}
+    \end{minipage}
+  \end{minipage}
+  \newpage
+}
+
+\newcommand{\contentslide}[2]{%
+  \stepcounter{slideno}
+  \begin{minipage}[t][8.72cm][t]{16cm}
+    \vspace*{0.72cm}
+    \hspace*{0.82cm}
+    \begin{minipage}{14.35cm}
+      {\color{Cream}\Large\bfseries #1}
+
+      \vspace{0.18cm}
+      {\color{SlateGrey}\rule{3.2cm}{0.35pt}}
+
+      \vspace{0.48cm}
+      #2
+      \slidefooter{\arabic{slideno}}
+    \end{minipage}
+  \end{minipage}
+  \newpage
+}
+
+% ── Utilities ──────────────────────────────────────────────────
+\newcommand{\tagline}[1]{{\color{MutedGold}\bfseries #1}}
+\newcommand{\soft}[1]{{\color{SoftGrey}#1}}
+\newcommand{\emphasis}[1]{{\color{Cream}\bfseries #1}}
+\newcommand{\callout}[1]{%
+  \begingroup
+  \setlength{\fboxsep}{0.2cm}%
+  \fcolorbox{MutedGold}{Carbon}{%
+    \begin{minipage}{\dimexpr\linewidth-2\fboxsep-2\fboxrule\relax}
+      \vspace{0.12cm}
+      {\color{Cream}\itshape #1}
+      \vspace{0.12cm}
+    \end{minipage}%
+  }
+  \endgroup
+}
+\newcommand{\darkbox}[1]{%
+  \begingroup
+  \setlength{\fboxsep}{0.2cm}%
+  \fcolorbox{SlateGrey}{DeepGrey}{%
+    \begin{minipage}{\dimexpr\linewidth-2\fboxsep-2\fboxrule\relax}
+      \vspace{0.1cm}
+      #1
+      \vspace{0.1cm}
+    \end{minipage}%
+  }
+  \endgroup
+}
+\newcommand{\twocol}[2]{%
+  \begin{minipage}[t]{6.75cm}#1\end{minipage}
+  \hfill
+  \begin{minipage}[t]{6.75cm}#2\end{minipage}
+}
+\newcommand{\threecol}[3]{%
+  \begin{minipage}[t]{4.35cm}#1\end{minipage}
+  \hfill
+  \begin{minipage}[t]{4.35cm}#2\end{minipage}
+  \hfill
+  \begin{minipage}[t]{4.35cm}#3\end{minipage}
+}
+\newcommand{\metric}[2]{%
+  \centering{\color{MutedGold}\Huge\bfseries #1}\\[0.25em]
+  {\color{SlateGrey}#2}
+}
+
+% ══════════════════════════════════════════════════════════════
+\begin{document}
+\pagecolor{Carbon}
+\color{Cream}
+
+% ── Slide 1: Title ────────────────────────────────────────────
+\titleslide
+
+% ── Slide 2: Background of the Internship ─────────────────────
+\contentslide{1. Background of the Internship}{
+  \vfill
+  \callout{A research internship in SSD systems engineering hosted at the Indian Institute of Technology Ropar, commenced May 11, 2026 --- ongoing.}
+  \vspace{0.5cm}
+
+  \twocol{
+    \tagline{Context}
+    \begin{itemize}
+      \item FLAME University SIP 2026
+      \item Remote / hybrid research placement
+      \item Started: May 11, 2026 (ongoing)
+      \item Supervisor: Prof. TV Kalyan
+    \end{itemize}
+  }{
+    \tagline{Broad Objective}
+    \begin{itemize}
+      \item Understand SSD architecture and FTL internals
+      \item Engage with academic systems research
+      \item Build, configure, and extend a research simulator
+    \end{itemize}
+  }
+}
+
+% ── Slide 3: About the Organisation ──────────────────────────
+\contentslide{2. About the Organisation}{
+  \twocol{
+    \darkbox{
+      \tagline{IIT Ropar}
+
+      \vspace{0.1cm}
+      A premier Institute of National Importance (2008), Punjab.
+      Department of Computer Science \& Engineering.
+    }
+
+    \vspace{0.2cm}
+    \darkbox{
+      \tagline{Computer Architecture \& Systems Research Lab}
+
+      \vspace{0.1cm}
+      Led by \textbf{Prof. Venkata Kalyan Tavva}.
+      Research: memory systems, SSD firmware, concurrent data structures, hardware-level cybersecurity.
+    }
+  }{
+    \tagline{Recent Publications from the Group}
+
+    \vspace{0.12cm}
+    \begin{itemize}
+      \item \textbf{RASP} (2026) --- Region-aware single-use page predictor; reduces SSD write traffic by 8\%.
+      \item \textbf{CARDR} (2024, MEMSYS) --- Ransomware detection inside the SSD DRAM cache via decision trees.
+      \item \textbf{FatCBST} (2017, HPCC) --- Concurrent binary search trees for SSD firmware.
+    \end{itemize}
+
+    \vspace{0.18cm}
+    \soft{\small Simulator: SimpleSSD-Standalone 2.0 (CAME Lab, South Korea / KAIST)}
+  }
+}
+
+% ── Slide 4: Section break ────────────────────────────────────
+\sectionslide{3. Nature of Assigned Work}{Literature Review}
+
+% ── Slide 5: Literature Review ───────────────────────────────
+\contentslide{Literature Review / Secondary Research}{
+  \begin{itemize}
+    \item \tagline{NAND Flash \& FTL (OSTEP; Zhu et al., 2020):} Erase-before-write physics, Logical-to-Physical (L2P) mapping, Garbage Collection, and Wear Levelling.
+    \item \tagline{RASP (Mir et al., 2026):} Region-aware single-use page predictor. Reduces flash writes by 8.04\% and execution time by 11.71\%.
+    \item \tagline{CARDR (Mir et al., 2024):} DRAM cache-assisted ransomware detection using lightweight decision trees embedded in the SSD controller.
+    \item \tagline{SrFTL (Zhu et al., 2025):} Semantic-reinforced FTL using Intel SGX enclaves --- 100\% ransomware detection, zero false positives.
+    \item \tagline{FatCBST (Alapati et al., 2017):} Concurrent binary search trees with fatnodes applied to SSD firmware data structures.
+  \end{itemize}
+}
+
+% ── Slide 6: Activities Undertaken ───────────────────────────
+\contentslide{Activities Undertaken}{
+  \begin{itemize}
+    \item \tagline{May 2026 --- Weeks 1--3 (Foundation):} Read OSTEP and survey papers; built vocabulary around GC, wear levelling, and FTL mapping schemes.
+    \item \tagline{June 2026 --- Weeks 4--6 (Simulator Setup):} Compiled SimpleSSD-Standalone 2.0; resolved CMake, SSH submodule, and compiler flag issues; documented setup for the lab.
+    \item \tagline{June--July 2026 --- Weeks 7--8 (Codebase Investigation):} Traced a full I/O request through HIL $\to$ ICL $\to$ FTL $\to$ PAL; understood DRAM cache and L2P table design.
+    \item \tagline{July 2026 --- Weeks 9--10 (Literature Review):} Deep reviews of RASP, CARDR, SrFTL, and FatCBST; weekly discussions with Waqar Hassan Mir.
+    \item \tagline{July 2026 --- Ongoing (Implementation \& Analysis):} Implementing bounded LRU Cache Mapping Table (CMT) in C++; ran 300+ parametric simulations; analysis continues.
+  \end{itemize}
+}
+
+% ── Slide 7: Architecture + CMT ──────────────────────────────
+\contentslide{Key Deliverable: Cache Mapping Table (CMT)}{
+  \twocol{
+    \darkbox{
+      \tagline{SimpleSSD Architecture}
+
+      \vspace{0.08cm}
+      {\small
+      \begin{tabular}{|c|}
+        \hline
+        \rowcolor{SlateGrey}{\color{Cream}\textbf{HIL} --- Host Interface Layer} \\
+        \hline
+        {\color{SoftGrey}NVMe / SATA command parsing} \\
+        \hline
+        \rowcolor{SlateGrey}{\color{Cream}\textbf{ICL} --- Internal Cache Layer} \\
+        \hline
+        {\color{SoftGrey}DRAM cache management} \\
+        \hline
+        \rowcolor{MutedGold}{\color{Carbon}\textbf{FTL} --- Flash Translation Layer $\leftarrow$ CMT} \\
+        \hline
+        {\color{SoftGrey}L2P mapping, GC, wear levelling} \\
+        \hline
+        \rowcolor{SlateGrey}{\color{Cream}\textbf{PAL} --- Physical Abstraction Layer} \\
+        \hline
+        {\color{SoftGrey}NAND timing model} \\
+        \hline
+      \end{tabular}
+      }
+    }
+  }{
+    \darkbox{
+      \tagline{What Was Built}
+
+      \vspace{0.1cm}
+      A bounded LRU mapping cache inside the FTL, replacing the simulator's unbounded in-RAM table.
+    }
+
+    \vspace{0.2cm}
+    \begin{itemize}
+      \item O(1) hit/eviction via \texttt{std::list}
+      \item Dirty-bit tracking \& write-back on eviction
+      \item 7 new statistics counters
+      \item Automated parallel sweep harness (300+ runs)
+    \end{itemize}
+
+    \vspace{0.1cm}
+    \darkbox{
+      \small Stock hit rate: 98.5\% \soft{(artefact)} $\to$ Bounded: \emphasis{10.67\%}
+    }
+  }
+}
+
+% ── Slide 8: Section break ────────────────────────────────────
+\sectionslide{3. Nature of Assigned Work}{Outcomes / Findings}
+
+% ── Slide 9: Outcomes / Findings ─────────────────────────────
+\contentslide{Outcomes / Findings}{
+  \vspace{0.05cm}
+  \threecol{
+    \metric{10.67\%}{CMT Hit Rate \soft{\small (bounded LRU)}}
+  }{
+    \metric{4.50\,J}{NAND Energy \soft{\small (vs.\ 35\,mJ DRAM)}}
+  }{
+    \metric{8,135}{Peak IOPS \soft{\small (128\,MB CMT, blk=128)}}
+  }
+
+  \vspace{0.55cm}
+  \begin{itemize}
+    \item \tagline{Power gap:} NAND program (4.50\,J) is 127$\times$ more energy-intensive than DRAM cache (35\,mJ) --- quantitatively validates RASP-style cache bypass.
+    \item \tagline{CMT size matters for writes:} GC cycles fell from 140 $\to$ 7 as CMT grew from 1\,MB to 128\,MB; IOPS rose from 2,039 $\to$ 8,135.
+    \item \tagline{Reads are CMT-insensitive:} Hit rate and IOPS were identical across all CMT sizes --- bottleneck is flash read latency, not the mapping layer.
+  \end{itemize}
+}
+
+% ── Slide 10: Personal Learning / Reflections ─────────────────
+\contentslide{4. Personal Learning / Reflections}{
+  \vfill
+  \callout{The distance between reading a paper and making it run in a simulator is where real systems understanding lives.}
+
+  \vspace{0.5cm}
+  \begin{itemize}
+    \item Developed the ability to independently navigate a 50,000+ line production-grade C++ firmware codebase.
+    \item Learned to \emph{invalidate} assumptions with data: the 98.5\% hit rate was a model artefact, not a real SSD behaviour.
+    \item Transitioned from viewing storage as a ``black box'' to understanding FTL internals, wear levelling, and hardware-level cybersecurity.
+    \item Gained exposure to academic research workflows: literature reviews, empirical analysis, and lab discussions.
+    \item Confirmed a long-term academic interest in systems architecture and hardware security, pointing toward graduate study.
+  \end{itemize}
+}
+
+% ── Slide 11: Limitations ─────────────────────────────────────
+\contentslide{5. Limitations}{
+  \twocol{
+    \darkbox{
+      \tagline{Simulation Fidelity}
+
+      \vspace{0.12cm}
+      SimpleSSD models ideal NAND timing. No thermal throttling, electrical latency spikes, or physical cell degradation was observable.
+    }
+
+    \vspace{0.28cm}
+    \begin{itemize}
+      \item GC triggered but not fully stressed
+      \item Wear-levelling factor inactive ($-$1)
+      \item No real open-channel SSD hardware
+    \end{itemize}
+  }{
+    \darkbox{
+      \tagline{Scope Constraint}
+
+      \vspace{0.12cm}
+      12 weeks is insufficient to implement and rigorously validate a complete FTL extension. The CMT is a first step.
+    }
+
+    \vspace{0.28cm}
+    \begin{itemize}
+      \item Only LRU eviction policy tested
+      \item RASP/CARDR integration not yet done
+      \item Environment setup consumed initial weeks
+    \end{itemize}
+  }
+}
+
+% ── Slide 12: Bibliography / References ───────────────────────
+\contentslide{6. Bibliography / References}{
+  {\small
+  \begin{itemize}
+    \setlength\itemsep{0.18cm}
+    \item Alapati, P., Tavva, V. K., \& Mutyam, M. (2017). FatCBST: Concurrent binary search tree with fatnodes. \textit{HPCC/SmartCity/DSS}, 356--363. \url{https://doi.org/10.1109/HPCC-SmartCity-DSS.2017.47}
+    \item Arpaci-Dusseau, R. H., \& Arpaci-Dusseau, A. C. (2018). \textit{Operating systems: Three easy pieces}. Arpaci-Dusseau Books.
+    \item Mir, W. H., Goel, N., \& Tavva, V. K. (2024). CARDR: DRAM cache assisted ransomware detection and recovery in SSDs. \textit{MEMSYS '24}, 104--115. \url{https://doi.org/10.1145/3695794.3695804}
+    \item Mir, W. H., Rathi, A., Tavva, V. K., \& Goel, N. (2026). RASP: Region-aware single use page predictor for SSD workloads. \textit{IEEE Embedded Systems Letters}. \url{https://doi.org/10.1109/LES.2026.3672700}
+    \item Zhu, W., et al.\ (2025). SrFTL: Leveraging storage semantics for ransomware defense in flash-based SSDs. \textit{ACM Transactions on Storage}, 21(4). \url{https://doi.org/10.1145/3767322}
+    \item Zhu, W., Wang, Y., \& Zhang, T. (2020). A comprehensive survey of issues in solid state drives. \textit{IEEE Access}, 8, 12433--12450.
+  \end{itemize}
+  }
+  \slidefooter{\arabic{slideno}}%
+  % override duplicate footer
+}
+
+% ── Slide 13: Q & A ───────────────────────────────────────────
+\contentslide{Q \& A}{
+  \Large
+  \begin{center}
+    \vspace*{2cm}
+    Thank you for listening!\\[0.4em]
+    Any Questions?
+  \end{center}
+
+  \vspace{0.55cm}
+  {\normalsize\color{MutedGold}\presenter}
+
+  \vspace{0.1cm}
+  {\small\color{SlateGrey}FLAME University \quad $\cdot$ \quad SIP 2026}
+
+  \label{LastSlide}
+}
+
+\end{document}
