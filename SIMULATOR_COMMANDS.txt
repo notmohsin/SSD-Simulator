@@ -1,0 +1,10 @@
+# Run the trace in Traces/stg_0.txt
+# Run these commands from the repository root.
+
+cmake --build build --target simplessd-standalone -j2
+rm -rf out_trace
+mkdir -p out_trace
+./build/simplessd-standalone \
+  config/trace_stg_0.cfg \
+  config/ssd_trace_replay.cfg \
+  out_trace
