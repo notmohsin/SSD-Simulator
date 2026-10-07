@@ -897,6 +897,8 @@ std::vector<uint64_t> PageMapping::collectFillCandidates(
     return candidates;
   }
 
+  candidates.reserve(maxBatch);
+
   uint64_t groupStart = (lpn / cmtWindowSize) * cmtWindowSize;
   uint64_t groupEnd =
       std::min(groupStart + cmtWindowSize, status.totalLogicalPages);
@@ -904,7 +906,7 @@ std::vector<uint64_t> PageMapping::collectFillCandidates(
   for (uint64_t candidateLpn = groupStart; candidateLpn < groupEnd;
        ++candidateLpn) {
     if (candidates.size() >= maxBatch) {
-      break;
+      break;  // stop as soon as the batch is full — do not scan the rest
     }
     if (candidateLpn == lpn) continue;
     if (cmtContains(candidateLpn)) continue;
