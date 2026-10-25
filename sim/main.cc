@@ -17,6 +17,8 @@
  * along with SimpleSSD.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <atomic>
+#include <condition_variable>
 #include <fstream>
 #include <iostream>
 #include <thread>
@@ -42,6 +44,9 @@ std::ostream *pDebugLog = nullptr;
 std::ostream *pLatencyFile = nullptr;
 std::thread *pThread = nullptr;
 std::mutex killLock;
+static std::condition_variable cvProgress;
+static std::mutex mutexProgress;
+static std::atomic<bool> stopProgress{false};
 SimpleSSD::Event statEvent;
 std::vector<SimpleSSD::Stats> statList;
 std::ofstream logOut;
@@ -261,6 +266,9 @@ int main(int argc, char *argv[]) {
 }
 
 void cleanup(int) {
+  stopProgress.store(true);
+  cvProgress.notify_all();
+
   uint64_t tick;
 
   killLock.lock();
@@ -346,13 +354,9 @@ void threadFunc(int tick) {
   auto duration = std::chrono::seconds(tick);
   BIL::Progress data;
 
-  while (true) {
-    std::this_thread::sleep_for(duration);
-
-    if (killLock.try_lock()) {
-      killLock.unlock();
-    }
-    else {
+  std::unique_lock<std::mutex> lock(mutexProgress);
+  while (!stopProgress.load()) {
+    if (cvProgress.wait_for(lock, duration, [] { return stopProgress.load(); })) {
       break;
     }
 
