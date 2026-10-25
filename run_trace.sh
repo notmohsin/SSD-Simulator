@@ -114,14 +114,17 @@ run_trace_instance() {
     "$SSD_SRC" > "$tmp_cfg/ssd.cfg"
 
   echo "==> Starting: $label"
-  local start_time end_time elapsed_s
+  local start_time end_time elapsed_s start_iso end_iso duration_fmt
   start_time=$(date +%s)
+  start_iso=$(date -Iseconds 2>/dev/null || date)
 
   "$BINARY" "$tmp_cfg/trace.cfg" "$tmp_cfg/ssd.cfg" "$run_dir" \
     > "$run_dir/console.log" 2>&1
 
   end_time=$(date +%s)
+  end_iso=$(date -Iseconds 2>/dev/null || date)
   elapsed_s=$(( end_time - start_time ))
+  duration_fmt=$(printf "%dm %02ds" $((elapsed_s / 60)) $((elapsed_s % 60)))
   rm -rf "$tmp_cfg"
 
   # Write metadata
@@ -129,17 +132,21 @@ run_trace_instance() {
   compiler_ver=$("${CXX:-c++}" --version 2>/dev/null | head -n1 | sed -e 's/["\\]//g' || echo "unknown")
   {
     printf '{\n'
-    printf '  "label": "%s",\n'        "$label"
+    printf '  "label": "%s",\n'            "$label"
     printf '  "trace": "stg_0.txt",\n'
-    printf '  "cmt_policy": %s,\n'     "$pol"
-    printf '  "window_fill": %s,\n'    "$wf"
-    printf '  "window_size": %s,\n'    "$WINDOW_SIZE"
-    printf '  "cmt_bytes": %s,\n'      "$cmt_b"
-    printf '  "io_limit": %s,\n'       "$limit"
-    printf '  "wall_secs": %s,\n'      "$elapsed_s"
-    printf '  "compiler": "%s",\n'     "$compiler_ver"
-    printf '  "git_commit": "%s",\n'   "$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-    printf '  "hostname": "%s"\n'      "$(hostname -s 2>/dev/null || echo unknown)"
+    printf '  "cmt_policy": %s,\n'         "$pol"
+    printf '  "window_fill": %s,\n'        "$wf"
+    printf '  "window_size": %s,\n'        "$WINDOW_SIZE"
+    printf '  "cmt_bytes": %s,\n'          "$cmt_b"
+    printf '  "io_limit": %s,\n'           "$limit"
+    printf '  "start_time": "%s",\n'       "$start_iso"
+    printf '  "end_time": "%s",\n'         "$end_iso"
+    printf '  "duration": "%s",\n'         "$duration_fmt"
+    printf '  "duration_seconds": %s,\n'   "$elapsed_s"
+    printf '  "wall_secs": %s,\n'          "$elapsed_s"
+    printf '  "compiler": "%s",\n'         "$compiler_ver"
+    printf '  "git_commit": "%s",\n'       "$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    printf '  "hostname": "%s"\n'          "$(hostname -s 2>/dev/null || echo unknown)"
     printf '}\n'
   } > "$run_dir/run_metadata.json"
 

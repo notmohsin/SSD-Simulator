@@ -133,6 +133,12 @@ def parse_log(path):
             row["warmup_seed"] = str(meta["warmup_seed"])
         if "status" in meta:
             row["status"] = str(meta["status"])
+        if "start_time" in meta:
+            row["start_time"] = str(meta["start_time"])
+        if "duration" in meta:
+            row["duration"] = str(meta["duration"])
+        elif "wall_secs" in meta:
+            row["duration"] = f"{meta['wall_secs']}s"
         if "git_commit" in meta:
             row["git_commit"] = str(meta["git_commit"])
 

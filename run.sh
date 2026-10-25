@@ -308,18 +308,21 @@ run_one() {
   if [[ "$SWEEP_MODE" != "true" ]]; then echo "  -> $label"; fi
 
   local summary="$tmp/summary.log"
-  local start_time end_time elapsed_s
+  local start_time end_time elapsed_s start_iso end_iso duration_fmt
 
   # Run the simulator in the background at lowest priority to prevent CPU lockouts
   nice -n 19 "$BINARY" "$tmp/standalone.cfg" "$tmp/simplessd.cfg" "$tmp/statprefix" \
     > "$summary" 2>&1 &
   local sim_pid=$!
   start_time=$(date +%s)
+  start_iso=$(date -Iseconds 2>/dev/null || date)
 
   local sim_status=0
   wait "$sim_pid" || sim_status=$?
   end_time=$(date +%s)
+  end_iso=$(date -Iseconds 2>/dev/null || date)
   elapsed_s=$(( end_time - start_time ))
+  duration_fmt=$(printf "%dm %02ds" $((elapsed_s/60)) $((elapsed_s%60)))
 
   {
     echo "=== SimpleSSD Simulation ==="
@@ -392,6 +395,10 @@ run_one() {
     printf '  "io_depth": %s,\n'     "$iodepth"
     printf '  "rw_mix_read": %s,\n'  "$rwmix"
     printf '  "warmup_seed": %s,\n'  "$WARMUP_SEED"
+    printf '  "start_time": "%s",\n'   "$start_iso"
+    printf '  "end_time": "%s",\n'     "$end_iso"
+    printf '  "duration": "%s",\n'     "$duration_fmt"
+    printf '  "duration_seconds": %s,\n' "$elapsed_s"
     printf '  "wall_secs": %s,\n'    "$elapsed_s"
     printf '  "status": "%s",\n'     "$job_status"
     printf '  "compiler": "%s",\n'   "$compiler_ver"
