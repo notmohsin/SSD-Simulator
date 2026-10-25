@@ -48,6 +48,7 @@ typedef enum {
   FTL_CMT_WRITEBACK_LATENCY,
   FTL_CMT_WINDOW_FILL,
   FTL_CMT_WINDOW_SIZE,
+  FTL_WARMUP_SEED,
 
   /* N+K Mapping configuration*/
   FTL_NKMAP_N,
@@ -103,6 +104,7 @@ class Config : public BaseConfig {
   uint64_t cmtWriteBackLatency;//!< Default: 500000000 (500us — NAND LSB program)
   bool cmtWindowFill;     //!< Default: false
   uint64_t cmtWindowSize;  //!< Default: 512
+  uint64_t warmupSeed;     //!< Default: 0 (use random_device)
 
  public:
   Config();

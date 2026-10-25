@@ -24,6 +24,7 @@
 #include <limits>
 #include <list>
 #include <unordered_map>
+#include <random>
 #include <vector>
 
 #include "ftl/abstract_ftl.hh"
@@ -54,6 +55,7 @@ class PageMapping : public AbstractFTL {
   bool bReclaimMore;
   bool bRandomTweak;
   uint32_t bitsetSize;
+  std::mt19937_64 rng_;  // shared RNG seeded from WarmupSeed config
 
   // ── CMT (Cached Mapping Table) ─────────────────────────────
   // A size-limited cache of mapping entries sitting on top of the GMT

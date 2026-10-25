@@ -32,8 +32,7 @@ set(DRAMPOWER_SOURCE_DIR
 
 # Check SimpleSSD is valid
 if (NOT EXISTS "${PROJECT_SOURCE_DIR}/simplessd/CMakeLists.txt")
-  message(FATAL_ERROR "Failed to find SimpleSSD. \
-Check you initialized submodules.")
+  message(FATAL_ERROR "Failed to find SimpleSSD directory (${PROJECT_SOURCE_DIR}/simplessd).")
 endif ()
 
 # Add subproject
@@ -151,3 +150,6 @@ add_executable(cmt_fill_budget_test tests/cmt_fill_budget_test.cc)
 target_include_directories(cmt_fill_budget_test PRIVATE
   ${PROJECT_SOURCE_DIR}/simplessd
 )
+
+enable_testing()
+add_test(NAME cmt_fill_budget_test COMMAND cmt_fill_budget_test)

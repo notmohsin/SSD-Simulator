@@ -95,6 +95,19 @@ PageMapping::PageMapping(ConfigReader &c, Parameter &p, PAL::PAL *l,
   cmtWriteBackLatency = conf.readUint(CONFIG_FTL, FTL_CMT_WRITEBACK_LATENCY);
   cmtMinFreq = 0;
 
+  // Seed shared RNG for warm-up and GC randomness.
+  // 0 = non-deterministic (random_device), any other value = fixed seed.
+  {
+    uint64_t cfgSeed = conf.readUint(CONFIG_FTL, FTL_WARMUP_SEED);
+    if (cfgSeed == 0) {
+      std::random_device rd;
+      cfgSeed = rd();
+    }
+    rng_.seed(cfgSeed);
+    debugprint(LOG_FTL_PAGE_MAPPING,
+               "RNG  | WarmupSeed = %" PRIu64, cfgSeed);
+  }
+
   debugprint(LOG_FTL_PAGE_MAPPING,
              "CMT  | Policy %s | %" PRIu64 " entries | %" PRIu64
              " B/entry (bitsetSize %u) | %" PRIu64 " B total",
@@ -319,14 +332,12 @@ bool PageMapping::initialize() {
     }
   }
   else {
-    // Random
-    std::random_device rd;
-    std::mt19937_64 gen(rd());
+    // Random (seeded from WarmupSeed — see constructor)
     std::uniform_int_distribution<uint64_t> dist(0, nTotalLogicalPages - 1);
 
     for (uint64_t i = 0; i < nPagesToWarmup; i++) {
       tick = 0;
-      req.lpn = dist(gen);
+      req.lpn = dist(rng_);
       writeInternal(req, tick, false);
     }
   }
@@ -344,25 +355,21 @@ bool PageMapping::initialize() {
     // Random
     // We can successfully restrict range of LPN to create exact number of
     // invalid pages because we wrote in sequential mannor in step 1.
-    std::random_device rd;
-    std::mt19937_64 gen(rd());
     std::uniform_int_distribution<uint64_t> dist(0, nPagesToWarmup - 1);
 
     for (uint64_t i = 0; i < nPagesToInvalidate; i++) {
       tick = 0;
-      req.lpn = dist(gen);
+      req.lpn = dist(rng_);
       writeInternal(req, tick, false);
     }
   }
   else {
-    // Random
-    std::random_device rd;
-    std::mt19937_64 gen(rd());
+    // Random (seeded from WarmupSeed — see constructor)
     std::uniform_int_distribution<uint64_t> dist(0, nTotalLogicalPages - 1);
 
     for (uint64_t i = 0; i < nPagesToInvalidate; i++) {
       tick = 0;
-      req.lpn = dist(gen);
+      req.lpn = dist(rng_);
       writeInternal(req, tick, false);
     }
   }
@@ -686,13 +693,11 @@ void PageMapping::selectVictimBlock(std::vector<uint32_t> &list,
   if (policy == POLICY_RANDOM || policy == POLICY_DCHOICE) {
     uint64_t randomRange =
         policy == POLICY_RANDOM ? nBlocks : dChoiceParam * nBlocks;
-    std::random_device rd;
-    std::mt19937 gen(rd());
     std::uniform_int_distribution<uint64_t> dist(0, weight.size() - 1);
     std::vector<std::pair<uint32_t, float>> selected;
 
     while (selected.size() < randomRange) {
-      uint64_t idx = dist(gen);
+      uint64_t idx = dist(rng_);
 
       if (weight.at(idx).first < std::numeric_limits<uint32_t>::max()) {
         selected.push_back(weight.at(idx));

@@ -45,6 +45,7 @@ const char NAME_CMT_MISS_LATENCY[] = "CMTMissLatency";
 const char NAME_CMT_WRITEBACK_LATENCY[] = "CMTWriteBackLatency";
 const char NAME_CMT_WINDOW_FILL[] = "CMTWindowFill";
 const char NAME_CMT_WINDOW_SIZE[] = "CMTWindowSize";
+const char NAME_WARMUP_SEED[] = "WarmupSeed";
 
 Config::Config() {
   mapping = PAGE_MAPPING;
@@ -67,6 +68,7 @@ Config::Config() {
   cmtWriteBackLatency = 500000000; // 500us — matches LSBWrite for MLC NAND
   cmtWindowFill = false;
   cmtWindowSize = 512;
+  warmupSeed = 0;
 }
 
 bool Config::setConfig(const char *name, const char *value) {
@@ -131,6 +133,9 @@ bool Config::setConfig(const char *name, const char *value) {
   }
   else if (MATCH_NAME(NAME_CMT_WINDOW_SIZE)) {
     cmtWindowSize = strtoull(value, nullptr, 10);
+  }
+  else if (MATCH_NAME(NAME_WARMUP_SEED)) {
+    warmupSeed = strtoull(value, nullptr, 10);
   }
   else {
     ret = false;
@@ -217,6 +222,9 @@ uint64_t Config::readUint(uint32_t idx) {
       break;
     case FTL_CMT_WINDOW_SIZE:
       ret = cmtWindowSize;
+      break;
+    case FTL_WARMUP_SEED:
+      ret = warmupSeed;
       break;
   }
 

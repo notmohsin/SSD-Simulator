@@ -1,9 +1,15 @@
 # Project Progress
 
-Last updated: 2026-08-11
+> **ARCHIVAL NOTE (October 2026):**
+> This document records the initial SIP 2026 CMT research milestones (August 2026).
+> The subsequent CMT Window-Fill implementation review and remediation plan has been completed:
+> - **Phase 1 (Test & CTest):** Corrected `windowFillBudget` to allow eviction-backed fills for sequential windows; registered `cmt_fill_budget_test` under CTest.
+> - **Phase 2 (Reproducibility):** Added `WarmupSeed` config parameter and unified shared PRNG in `PageMapping` for reproducible warm-up states.
+> - **Phase 3 (Git Hygiene):** Untracked binaries, logs, agent scratch files, and large traces; added `Traces/download_traces.sh` and comprehensive `.gitignore`.
+> - **Phase 4 (Automation & Analysis):** Hardened `run.sh` (pre-flight checks, sed validation, machine-readable `*.meta.json`, PID-safe process management, non-zero error propagation) and modernized `analyze_outputs.py`.
+> - **Phase 5 (Docs):** Removed stale tutorial/submodule links and clarified runtime requirements.
 
-SIP 2026 — CMT (Cached Mapping Table) study on a SimpleSSD fork.
-Working tree: `SimpleSSD-Standalone/`, with the simulator itself in the `simplessd/` submodule.
+Last updated: 2026-10-25 (originally 2026-08-11)
 
 ## Deliverables
 

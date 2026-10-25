@@ -13,9 +13,11 @@ namespace FTL {
 //
 // Random / first-in-window: only use already-free slots after reserving one
 // for the demand mapping.  Never evict a full CMT to install unused neighbors.
-// Sequential (previous demand LPN in the same translation window): allow up to
-// windowSize-1 insertions, but cap by half the free slots to avoid evicting
-// large fractions of the cache on near-full runs.
+// Sequential (previous demand LPN in the same translation window): allow
+// eviction-backed fills up to windowSize-1 entries, capped so that no single
+// miss evicts more than half the cache.  This lets a sequential scan amortize
+// the translation-page read across the whole window even when the cache is
+// full, which is the primary benefit of window fill.
 inline uint64_t windowFillBudget(uint64_t occupied, uint64_t capacity,
                                  uint64_t windowSize,
                                  bool sequentialWindow) {
@@ -23,27 +25,30 @@ inline uint64_t windowFillBudget(uint64_t occupied, uint64_t capacity,
     return 0;
   }
 
+  const uint64_t maxByWindow = windowSize - 1;
+
+  if (sequentialWindow) {
+    // Sequential: allow eviction-backed fills.  Cap at half the cache so a
+    // single miss never displaces more than 50% of resident entries.
+    // When free slots exist, use those first (freeSlots/2 + 1).
+    // When full, allow up to capacity/2 evictions.
+    if (occupied >= capacity) {
+      return std::min(maxByWindow, capacity / 2);
+    }
+    const uint64_t freeSlots = capacity - occupied;
+    return std::min(maxByWindow, std::max(freeSlots / 2 + 1, capacity / 2));
+  }
+
+  // Random / first-in-window: only use genuinely free slots (no eviction).
   if (occupied >= capacity) {
     return 0;
   }
 
   const uint64_t freeSlots = capacity - occupied;
-
   if (freeSlots <= 1) {
     return 0;
   }
 
-  const uint64_t maxByWindow = windowSize - 1;
-
-  if (sequentialWindow) {
-    // Sequential: allow eviction-backed fills, but never more than half of
-    // the free space in one batch.  Previously this path ignored occupancy
-    // entirely (returned min(windowSize-1, capacity-1)), causing hundreds of
-    // evictions per miss when the cache was near-full.
-    return std::min(maxByWindow, freeSlots / 2 + 1);
-  }
-
-  // Random miss: only use genuinely free slots (no eviction triggered).
   return std::min(maxByWindow, freeSlots - 1);
 }
 

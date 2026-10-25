@@ -56,3 +56,19 @@ results/
 # Local migration artifacts
 *-migration-backup/
 *-subtree-attempt/
+
+# Compiled test binaries (built into build/ by CMake; root copy is stale)
+cmt_fill_budget_test
+
+# Simulator run output trees
+out_*/
+
+# Agent state dirs (teamwork orchestrator artifacts, not source)
+.agents/
+agents/
+
+# Trace binary / scratch files (large raw text trace is tracked via Git LFS)
+Traces/*.bin
+
+# Misc scratch files
+prom

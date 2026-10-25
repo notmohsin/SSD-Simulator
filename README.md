@@ -44,14 +44,9 @@ This repository is the standalone build of the SimpleSSD project used for experi
 Before building the project, make sure you have:
 
 - CMake 3.10 or newer
-- A modern C++ compiler (GCC/Clang/MSVC supported)
-- Git submodules initialized if the bundled dependencies are not already present
-
-Typical Linux prerequisites:
-
-```bash
-git submodule update --init --recursive
-```
+- A modern C++ compiler (GCC / Clang) with C++17 support
+- Linux environment for `run.sh` (uses `flock` and `find -printf`)
+- Python 3 (standard library only) for `analyze_outputs.py`
 
 ## Quick start
 
