@@ -1,328 +1,267 @@
 #!/usr/bin/env bash
 # =============================================================================
-# run.sh -- SimpleSSD CMT Window-Fill Experiment Runner
+# run.sh -- Simple, Easy-to-Edit Runner for SimpleSSD CMT Experiments
 #
-# USAGE
-#   bash run.sh                  # single run with settings from SECTION 1
-#   TEST_MODE=true bash run.sh   # window-fill validation test (sequential read)
-#   SWEEP_MODE=true bash run.sh  # sweep all combinations from SECTION 2
-#   bash run.sh kill             # forcefully terminate all running simulations
-#   bash run.sh clean            # remove all orphaned .sim_tmp_ directories
+# HOW TO USE:
+#   1. Edit the settings in SECTION 1 (or SECTION 2 for sweeps) below.
+#   2. Set MODE="single", MODE="sweep", or MODE="test".
+#   3. Run:
+#        bash run.sh
 #
-# REQUIREMENTS
-#   Linux only: uses flock(1) and find -printf (not available on macOS/Windows).
-#
-# OUTPUT
-#   outputs/<label>.txt          -- full subsystem stats + run summary
-#   outputs/<label>.meta.json   -- machine-readable run metadata (for analyze_outputs.py)
+#   You can also pass the mode directly on the command line:
+#        bash run.sh single   # run one simulation using SECTION 1 settings
+#        bash run.sh sweep    # run all combinations in SECTION 2
+#        bash run.sh test     # run the 8 window-fill validation tests
+#        bash run.sh kill     # stop all running simulations
+#        bash run.sh clean    # delete temporary .sim_tmp_* folders
 # =============================================================================
 
+# Stop the script if any command fails or an undefined variable is used
 set -euo pipefail
 
-# -----------------------------------------------------------------------------
-# VALID CONFIGURATION PARAMETERS REFERENCE
-# -----------------------------------------------------------------------------
-# WORKLOAD         : "read", "write", "randread", "randwrite", "randrw"
-# IO_SIZE          : Any size with suffix (e.g. "512M", "2G", "8G", "1T", "4T")
-# BLOCK_SIZE       : Request size with suffix (e.g. "4K", "16K", "64K")
-# IO_DEPTH         : Integer >= 1 (Async queue depth; 1 = synchronous)
-# RW_MIX_READ      : Float between 0.0 and 1.0 (Fraction of reads for randrw)
-# CMT_POLICY       : 0 (LRU), 1 (LFU)
-# CMT_BYTES        : Integer size in bytes. (Mapping table is typically 1/1000th of SSD capacity)
-#                    - 1048576     (1MiB)   -> Tiny cache for 2TB SSD
-#                    - 2097152     (2MiB)
-#                    - 4194304     (4MiB)
-#                    - 8388608     (8MiB)
-#                    - 16777216    (16MiB)
-#                    - 33554432    (32MiB)
-#                    - 67108864    (64MiB)
-#                    - 134217728   (128MiB) -> 100% maps a 128GB SSD
-#                    - 268435456   (256MiB) -> 100% maps a 256GB SSD (or 12.5% cache for 2TB)
-#                    - 536870912   (512MiB) -> 100% maps a 512GB SSD (or 25% cache for 2TB)
-#                    - 1073741824  (1GB)    -> 100% maps a 1TB SSD (or 50% cache for 2TB)
-#                    - 2147483648  (2GB)    -> 100% maps a 2TB SSD (Standard enterprise)
-#                    - 4294967296  (4GB)    -> 100% maps a 4TB SSD
-#                    - 8589934592  (8GB)    -> 100% maps a 8TB SSD
-#                    - 17179869184 (16GB)   -> 100% maps a 16TB SSD
-# FILL_RATIO       : Float between 0.0 and 1.0 (SSD warm-up fill level)
-# EVICT_POLICY     : 0 (Greedy), 1 (Cost-Benefit), 2 (Random), 3 (D-Choice)
-# WINDOW_FILL      : "true" (enable CMT window fill), "false"
-# WINDOW_SIZE      : Integer (LPNs per translation page, typically 512)
-# -----------------------------------------------------------------------------
+# =============================================================================
+# SECTION 1: MODE & SINGLE-RUN SETTINGS (Edit these values directly)
+# =============================================================================
 
-# -----------------------------------------------------------------------------
-# SECTION 1: SINGLE-RUN CONFIGURATION
-# -----------------------------------------------------------------------------
+# Choose what to run: "single", "sweep", "test", "kill", or "clean"
+MODE="single"
 
-WORKLOAD="${WORKLOAD:-randwrite}"     # randread | randwrite | randrw | read | write
-IO_SIZE="${IO_SIZE:-4G}"             # total I/O to issue  (e.g. 512M, 2G, 4G, 8G)
-BLOCK_SIZE="${BLOCK_SIZE:-4K}"       # request size        (e.g. 4K, 16K, 64K)
-IO_DEPTH="${IO_DEPTH:-32}"           # async queue depth   (1 = synchronous)
-RW_MIX_READ="${RW_MIX_READ:-0.5}"    # read fraction for randrw (ignored otherwise)
+# Workload type: "read", "write", "randread", "randwrite", or "randrw"
+WORKLOAD="randwrite"
 
-CMT_POLICY="${CMT_POLICY:-0}"        # 0 = LRU  |  1 = LFU
-CMT_BYTES="${CMT_BYTES:-16777216}"   # CMT size in bytes  (16777216 = 16 MiB)
-FILL_RATIO="${FILL_RATIO:-0.8}"      # warm-up fill level  (0.0 to 1.0)
-EVICT_POLICY="${EVICT_POLICY:-0}"    # GC victim selection: 0=greedy 1=cost-benefit 2=random 3=d-choice
-WINDOW_FILL="${WINDOW_FILL:-false}"   # CMT window fill: true | false (off by default; random I/O cannot use spatial fill)
-WINDOW_SIZE="${WINDOW_SIZE:-512}"   # LPNs per translation page (fixed)
-WARMUP_SEED="${WARMUP_SEED:-0}"     # RNG seed for warm-up: 0=random, non-zero=reproducible
+# Total data to transfer (e.g. "512M", "2G", "4G", "8G")
+IO_SIZE="4G"
 
-OUTPUT_DIR="${OUTPUT_DIR:-outputs}"         # directory to write .log files into
-PROGRESS_INTERVAL="${PROGRESS_INTERVAL:-5}" # Live progress update interval in seconds
+# Size of each I/O request (e.g. "4K", "16K", "64K")
+BLOCK_SIZE="4K"
 
-# -----------------------------------------------------------------------------
-# SECTION 2: SWEEP & TEST CONFIGURATION
-# -----------------------------------------------------------------------------
+# Number of parallel requests in flight (1 = synchronous, 32 = standard NVMe)
+IO_DEPTH=32
 
-SWEEP_MODE="${SWEEP_MODE:-false}"
-TEST_MODE="${TEST_MODE:-false}"
+# Fraction of reads when WORKLOAD="randrw" (0.5 = 50% reads, 50% writes)
+RW_MIX_READ="0.5"
 
-# MAX_PARALLEL: Number of simulator instances to run simultaneously.
-# Options: 1 (Sequential), 4-16 (Depending on available CPU cores and RAM).
-MAX_PARALLEL="${MAX_PARALLEL:-4}"
+# CMT replacement policy: 0 = LRU (Least Recently Used), 1 = LFU (Least Frequently Used)
+CMT_POLICY=0
 
-# SWEEP_WORKLOADS: The I/O access patterns to simulate.
-# Options: "read" (Sequential Read), "write" (Sequential Write),
-#          "randread" (Random Read), "randwrite" (Random Write), "randrw" (Mixed Random).
-if [[ -z "${SWEEP_WORKLOADS+x}" ]]; then
-  SWEEP_WORKLOADS=( "randread" "randwrite" "randrw" )
+# CMT cache size in bytes:
+#   524288   = 512 KiB
+#   2097152  = 2 MiB
+#   16777216 = 16 MiB
+#   33554432 = 32 MiB
+CMT_BYTES=16777216
+
+# How full the SSD is after warm-up (0.0 = empty, 0.8 = 80% full, 1.0 = 100% full)
+FILL_RATIO="0.8"
+
+# Garbage Collection victim selection policy:
+#   0 = Greedy, 1 = Cost-Benefit, 2 = Random, 3 = D-Choice
+EVICT_POLICY=0
+
+# CMT Window Fill (prefetch neighboring LPN mappings on a miss): "true" or "false"
+WINDOW_FILL="false"
+
+# Number of LPNs per translation window (typically 512)
+WINDOW_SIZE=512
+
+# Random seed for warm-up (0 = random each run, any other number = reproducible)
+WARMUP_SEED=0
+
+# Folder where output logs and JSON files will be saved
+OUTPUT_DIR="outputs"
+
+
+# =============================================================================
+# SECTION 2: SWEEP SETTINGS (Used when MODE="sweep")
+# =============================================================================
+
+# Maximum number of simulations to run at the same time
+MAX_PARALLEL=4
+
+# Lists of values to test (separate items with spaces inside parentheses)
+SWEEP_WORKLOADS=( "randread" "randwrite" "randrw" )
+SWEEP_CMT_BYTES=( 16777216 33554432 )
+SWEEP_BLOCK_SIZES=( "4K" )
+SWEEP_CMT_POLICIES=( 0 1 )
+SWEEP_WINDOW_FILL=( "false" )
+SWEEP_WINDOW_SIZES=( 512 )
+SWEEP_FILL_RATIOS=( "0.8" )
+SWEEP_IO_SIZES=( "4G" )
+SWEEP_RW_MIX_READ=( "0.5" )
+
+SWEEP_IO_DEPTH=32
+SWEEP_EVICT_POLICY=0
+
+
+# =============================================================================
+# SECTION 3: HELPER FUNCTIONS (No need to edit below this line)
+# =============================================================================
+
+# Allow overriding MODE from the command line (e.g. `bash run.sh sweep`)
+if [[ $# -gt 0 ]]; then
+  MODE="$1"
 fi
 
-# SWEEP_CMT_BYTES: Capacity of the Cached Mapping Table in bytes.
-# Options: Any integer. Common: 524288 (512KiB), 2097152 (2MiB), 16777216 (16MiB), 33554432 (32MiB).
-if [[ -z "${SWEEP_CMT_BYTES+x}" ]]; then
-  SWEEP_CMT_BYTES=( 16777216 33554432 )
-fi
-
-# SWEEP_BLOCK_SIZES: Request size of the host I/O.
-# Options: "4K", "8K", "16K", "32K", "64K", "128K", etc. (Must be multiplier of NAND page).
-if [[ -z "${SWEEP_BLOCK_SIZES+x}" ]]; then
-  SWEEP_BLOCK_SIZES=( "4K" )
-fi
-
-# SWEEP_CMT_POLICIES: Eviction policy for the Cached Mapping Table.
-# Options: 0 (LRU - Least Recently Used), 1 (LFU - Least Frequently Used).
-if [[ -z "${SWEEP_CMT_POLICIES+x}" ]]; then
-  SWEEP_CMT_POLICIES=( 0 1 )
-fi
-
-# SWEEP_WINDOW_FILL: Enable or disable CMT window fill on a demand miss.
-# Options: "false" (Disabled), "true" (Enabled).
-# Default sweep is policy/capacity on random I/O with window-fill OFF.
-# Enable WF_ON only for sequential/strided jobs (see TEST_MODE), not rand*.
-if [[ -z "${SWEEP_WINDOW_FILL+x}" ]]; then
-  SWEEP_WINDOW_FILL=( "false" )
-fi
-
-# SWEEP_WINDOW_SIZES: LPNs to install from one translation-page read.
-# Fixed at 512 (one mapping page). Do not derive from PAL PageSize.
-if [[ -z "${SWEEP_WINDOW_SIZES+x}" ]]; then
-  SWEEP_WINDOW_SIZES=( 512 )
-fi
-
-# SWEEP_FILL_RATIO: The initial capacity utilization of the SSD before the test begins.
-# Options: 0.0 (Empty SSD) to 1.0 (Completely full, forces immediate GC and steady-state).
-if [[ -z "${SWEEP_FILL_RATIOS+x}" ]]; then
-  SWEEP_FILL_RATIOS=( 0.8 )
-fi
-
-# SWEEP_IO_SIZES: Total amount of I/O data to issue during the simulation.
-# Options: "1G", "4G", "16G", "64G", etc. Larger sizes ensure steady-state cache behavior.
-if [[ -z "${SWEEP_IO_SIZES+x}" ]]; then
-  SWEEP_IO_SIZES=( "4G" )
-fi
-
-# SWEEP_IO_DEPTH: Number of outstanding asynchronous I/O requests.
-# Options: 1 (Synchronous), 32 (Standard NVMe), 128 (Heavy enterprise load).
-SWEEP_IO_DEPTH="${SWEEP_IO_DEPTH:-32}"
-
-# SWEEP_RW_MIX_READ: Percentage of read operations (only applies if workload is "randrw").
-# Options: 0.0 to 1.0. (e.g., 0.7 = 70% Reads, 30% Writes).
-if [[ -z "${SWEEP_RW_MIX_READ+x}" ]]; then
-  SWEEP_RW_MIX_READ=( 0.5 )
-fi
-
-# SWEEP_EVICT_POLICY: Victim block selection policy for NAND Garbage Collection.
-# Options: 0 (Greedy), 1 (Cost-Benefit), 2 (Random), 3 (d-Choice).
-SWEEP_EVICT_POLICY="${SWEEP_EVICT_POLICY:-0}"
-
-# -----------------------------------------------------------------------------
-# SECTION 3: RUN LOGIC
-# -----------------------------------------------------------------------------
-
+# Find the folder where run.sh lives
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-
-# --- Utilities ---
-RUNNER_PID_FILE="${TMPDIR:-/tmp}/simplessd_runner_$$.pid"
-echo "$$" > "$RUNNER_PID_FILE"
-trap 'rm -f "$RUNNER_PID_FILE"' EXIT
-
-if [[ "${1:-}" == "kill" ]]; then
-  echo "Killing all active SimpleSSD simulators and background sweeps..."
-  pkill -9 -f "simplessd-standalone" 2>/dev/null || true
-  killall -9 simplessd-standalone 2>/dev/null || true
-
-  # Kill only run.sh PID files we own — avoids hitting unrelated bash processes
-  for pidfile in "${TMPDIR:-/tmp}"/simplessd_runner_*.pid; do
-    [[ -f "$pidfile" ]] || continue
-    pid=$(cat "$pidfile" 2>/dev/null) || continue
-    if [[ "$pid" != "$$" ]]; then
-      kill -9 "$pid" 2>/dev/null || true
-      rm -f "$pidfile"
-    fi
-  done
-  echo "Done."
-  exit 0
-fi
-
-if [[ "${1:-}" == "clean" ]]; then
-  echo "Removing orphaned .sim_tmp_* directories..."
-  rm -rf "$SCRIPT_DIR"/.sim_tmp_*
-  echo "Done."
-  exit 0
-fi
-
 BINARY="$SCRIPT_DIR/simplessd-standalone"
-BUILD_STAMP="$SCRIPT_DIR/.run-build-initialized"
-BUILD_LOCK="$SCRIPT_DIR/.run-build.lock"
-
-exec 9>"$BUILD_LOCK"
-flock -x 9
-if [[ ! -f "$BUILD_STAMP" ]]; then
-  echo "First run: removing the old binary and building SimpleSSD..."
-  rm -f "$BINARY"
-  BUILD_DIR="$SCRIPT_DIR"
-  if [[ -f "$SCRIPT_DIR/build/CMakeCache.txt" ]]; then
-    BUILD_DIR="$SCRIPT_DIR/build"
-  fi
-  cmake --build "$BUILD_DIR" --target simplessd-standalone
-  if [[ "$BUILD_DIR" != "$SCRIPT_DIR" && -f "$BUILD_DIR/simplessd-standalone" ]]; then
-    cp "$BUILD_DIR/simplessd-standalone" "$BINARY"
-  fi
-  [[ -x "$BINARY" ]] || {
-    echo "ERROR: build completed without creating executable: $BINARY"
-    exit 1
-  }
-  printf 'Initialized: %s\n' "$(date)" > "$BUILD_STAMP"
-fi
-flock -u 9
-
 BASE_CFG="$SCRIPT_DIR/config/sample.cfg"
 SSD_CFG="$SCRIPT_DIR/simplessd/config/sample.cfg"
 
-# Sanity checks
-[[ -x "$BINARY"   ]] || { echo "ERROR: binary not found: $BINARY"; exit 1; }
-[[ -f "$BASE_CFG" ]] || { echo "ERROR: missing: $BASE_CFG"; exit 1; }
-[[ -f "$SSD_CFG"  ]] || { echo "ERROR: missing: $SSD_CFG"; exit 1; }
+# Helper 1: Build the simulator binary every time before running
+build_simulator() {
+  echo "Building simplessd-standalone..."
+  local build_dir="$SCRIPT_DIR/build"
 
-for key in readwrite blocksize io_size iodepth rwmixread LogFile LogPeriod LatencyLogFile; do
-  if ! grep -q "^${key} *=" "$BASE_CFG"; then
-    echo "ERROR: Required key '$key' missing in $BASE_CFG" >&2
+  # Configure CMake if the build folder doesn't exist yet
+  if [[ ! -f "$build_dir/CMakeCache.txt" ]]; then
+    cmake -S "$SCRIPT_DIR" -B "$build_dir"
+  fi
+
+  # Compile using all available CPU cores
+  local cores
+  cores=$(nproc 2>/dev/null || echo 2)
+  cmake --build "$build_dir" --target simplessd-standalone -j "$cores"
+
+  # Copy the compiled binary to the project root so it is easy to find
+  if [[ -f "$build_dir/simplessd-standalone" ]]; then
+    cp "$build_dir/simplessd-standalone" "$BINARY"
+  fi
+
+  if [[ ! -x "$BINARY" ]]; then
+    echo "ERROR: Build finished, but $BINARY was not found."
     exit 1
   fi
-done
-
-for key in Block CMTCapacityBytes CMTCapacityRatio CMTPolicy CMTWindowFill CMTWindowSize FillRatio EvictPolicy WarmupSeed EnableReadCache EnableWriteCache; do
-  if ! grep -q "^${key} *=" "$SSD_CFG"; then
-    echo "ERROR: Required key '$key' missing in $SSD_CFG" >&2
-    exit 1
-  fi
-done
-
-mkdir -p "$OUTPUT_DIR"
-
-
-make_label() {
-  local p="LRU"; [ "$4" = "1" ] && p="LFU"
-  local pf="WF_OFF"; [ "$5" = "true" ] && pf="WF_ON_W$6"
-  local sz="$(( $2 / 1048576 ))MiB"; (( $2 < 1048576 )) && sz="$(( $2 / 1024 ))KiB"
-  local w="$1"; [ "$1" = "randrw" ] && w="${1}_mix${10}"
-  echo "${w}_${p}_${pf}_${sz}_$3_$9_fill$7_evict$8"
+  echo "Build complete."
+  echo ""
 }
 
-run_one() {
-  local wl="$1" cmt_b="$2" bs="$3" pol="$4" pref="$5" win="$6" \
-        fill="$7" ios="$8" iodepth="$9" rwmix="${10}" evict="${11}"
+# Helper 2: Replace `key = ...` with `key = new_value` in a config file
+set_config_value() {
+  local file="$1"
+  local key="$2"
+  local value="$3"
+
+  if ! grep -q "^${key} *=" "$file"; then
+    echo "ERROR: Config key '$key' not found in $file"
+    exit 1
+  fi
+  sed -i "s|^${key} *=.*|${key} = ${value}|" "$file"
+}
+
+# Helper 3: Create a descriptive filename label for a simulation run
+# Example output: randwrite_LRU_WF_OFF_16MiB_4K_4G_fill0.8_evict0
+make_label() {
+  local wl="$1" cmt_b="$2" bs="$3" pol="$4" wf="$5" win="$6" fill="$7" evict="$8" ios="$9" rwmix="${10}"
+
+  local policy_name="LRU"
+  if [[ "$pol" == "1" ]]; then
+    policy_name="LFU"
+  fi
+
+  local wf_name="WF_OFF"
+  if [[ "$wf" == "true" ]]; then
+    wf_name="WF_ON_W${win}"
+  fi
+
+  local size_name
+  if (( cmt_b >= 1048576 )); then
+    size_name="$(( cmt_b / 1048576 ))MiB"
+  else
+    size_name="$(( cmt_b / 1024 ))KiB"
+  fi
+
+  local workload_name="$wl"
+  if [[ "$wl" == "randrw" ]]; then
+    workload_name="randrw_mix${rwmix}"
+  fi
+
+  echo "${workload_name}_${policy_name}_${wf_name}_${size_name}_${bs}_${ios}_fill${fill}_evict${evict}"
+}
+
+# Helper 4: Run a single simulation job and save its .txt and .meta.json files
+run_one_simulation() {
+  local wl="$1"
+  local cmt_b="$2"
+  local bs="$3"
+  local pol="$4"
+  local wf="$5"
+  local win="$6"
+  local fill="$7"
+  local ios="$8"
+  local iodepth="$9"
+  local rwmix="${10}"
+  local evict="${11}"
 
   local label
-  label=$(make_label "$wl" "$cmt_b" "$bs" "$pol" "$pref" "$win" "$fill" "$evict" "$ios" "$rwmix")
+  label=$(make_label "$wl" "$cmt_b" "$bs" "$pol" "$wf" "$win" "$fill" "$evict" "$ios" "$rwmix")
   local outfile="$OUTPUT_DIR/${label}.txt"
+  local metafile="$OUTPUT_DIR/${label}.meta.json"
 
-  # Skip if this simulation was already completed in a previous run
-  if [[ "$SWEEP_MODE" == "true" && -s "$outfile" && -n "$(grep "cmt\.hit_rate" "$outfile" 2>/dev/null)" ]]; then
+  # In sweep mode, skip jobs that already finished in an earlier run
+  if [[ "$MODE" == "sweep" && -s "$outfile" ]] && grep -q "cmt\.hit_rate" "$outfile" 2>/dev/null; then
+    echo "  [SKIP] $label (already completed)"
     if [[ -n "${SWEEP_SUMMARY_FILE:-}" ]]; then
-      flock "$SWEEP_SUMMARY_FILE" \
-        printf "%-70s  %7s  %8s  %7s  %s\n" \
-        "$label" "-" "-" "-" "SKIPPED" >> "$SWEEP_SUMMARY_FILE"
+      printf "%-70s  %7s  %8s  %7s  %s\n" "$label" "-" "-" "-" "SKIPPED" >> "$SWEEP_SUMMARY_FILE"
     fi
     return 0
   fi
 
-  local tmp
-  tmp=$(mktemp -d "$SCRIPT_DIR/.sim_tmp_XXXXXX")
-  local statsfile="$tmp/stats.log"
+  echo "  [START] $label"
 
-  # Patch LogPeriod=5000 in standalone config so we get live stats updates
-  sed \
-    -e "s|^readwrite *=.*|readwrite = $wl|" \
-    -e "s|^blocksize *=.*|blocksize = $bs|" \
-    -e "s|^io_size *=.*|io_size = $ios|" \
-    -e "s|^iodepth *=.*|iodepth = $iodepth|" \
-    -e "s|^rwmixread *=.*|rwmixread = $rwmix|" \
-    -e "s|^LogFile *=.*|LogFile = $statsfile|" \
-    -e "s|^LogPeriod *=.*|LogPeriod = 5000|" \
-    -e "s|^LatencyLogFile *=.*|LatencyLogFile =|" \
-    "$BASE_CFG" > "$tmp/standalone.cfg"
+  # Create a temporary folder for this job's config and raw log files
+  local tmp_dir
+  tmp_dir=$(mktemp -d "$SCRIPT_DIR/.sim_tmp_XXXXXX")
+  local stats_file="$tmp_dir/stats.log"
+  local console_file="$tmp_dir/console.log"
+  local standalone_cfg="$tmp_dir/standalone.cfg"
+  local simplessd_cfg="$tmp_dir/simplessd.cfg"
 
-  for key in readwrite blocksize io_size iodepth rwmixread LogFile LogPeriod LatencyLogFile; do
-    if ! grep -q "^${key} *=" "$tmp/standalone.cfg"; then
-      echo "ERROR: Config key '$key' missing in generated $tmp/standalone.cfg" >&2
-      rm -rf "$tmp"
-      return 1
-    fi
-  done
+  cp "$BASE_CFG" "$standalone_cfg"
+  cp "$SSD_CFG"  "$simplessd_cfg"
 
-  sed \
-    -e "s|^Block *=.*|Block = 512|" \
-    -e "s|^CMTCapacityBytes *=.*|CMTCapacityBytes = $cmt_b|" \
-    -e "s|^CMTCapacityRatio *=.*|CMTCapacityRatio = 0.0|" \
-    -e "s|^CMTPolicy *=.*|CMTPolicy = $pol|" \
-    -e "s|^CMTWindowFill *=.*|CMTWindowFill = $pref|" \
-    -e "s|^CMTWindowSize *=.*|CMTWindowSize = $win|" \
-    -e "s|^FillRatio *=.*|FillRatio = $fill|" \
-    -e "s|^EvictPolicy *=.*|EvictPolicy = $evict|" \
-    -e "s|^WarmupSeed *=.*|WarmupSeed = $WARMUP_SEED|" \
-    -e "s|^EnableReadCache *=.*|EnableReadCache = 0|" \
-    -e "s|^EnableWriteCache *=.*|EnableWriteCache = 0|" \
-    "$SSD_CFG" > "$tmp/simplessd.cfg"
+  # Update standalone generator config
+  set_config_value "$standalone_cfg" "readwrite"      "$wl"
+  set_config_value "$standalone_cfg" "blocksize"      "$bs"
+  set_config_value "$standalone_cfg" "io_size"        "$ios"
+  set_config_value "$standalone_cfg" "iodepth"        "$iodepth"
+  set_config_value "$standalone_cfg" "rwmixread"      "$rwmix"
+  set_config_value "$standalone_cfg" "LogFile"        "$stats_file"
+  set_config_value "$standalone_cfg" "LogPeriod"      "5000"
+  set_config_value "$standalone_cfg" "LatencyLogFile" ""
 
-  for key in Block CMTCapacityBytes CMTCapacityRatio CMTPolicy CMTWindowFill CMTWindowSize FillRatio EvictPolicy WarmupSeed EnableReadCache EnableWriteCache; do
-    if ! grep -q "^${key} *=" "$tmp/simplessd.cfg"; then
-      echo "ERROR: Config key '$key' missing in generated $tmp/simplessd.cfg" >&2
-      rm -rf "$tmp"
-      return 1
-    fi
-  done
+  # Update SimpleSSD internal config
+  set_config_value "$simplessd_cfg" "Block"              "512"
+  set_config_value "$simplessd_cfg" "CMTCapacityBytes"   "$cmt_b"
+  set_config_value "$simplessd_cfg" "CMTCapacityRatio"   "0.0"
+  set_config_value "$simplessd_cfg" "CMTPolicy"          "$pol"
+  set_config_value "$simplessd_cfg" "CMTWindowFill"      "$wf"
+  set_config_value "$simplessd_cfg" "CMTWindowSize"      "$win"
+  set_config_value "$simplessd_cfg" "FillRatio"          "$fill"
+  set_config_value "$simplessd_cfg" "EvictPolicy"        "$evict"
+  set_config_value "$simplessd_cfg" "WarmupSeed"         "$WARMUP_SEED"
+  set_config_value "$simplessd_cfg" "EnableReadCache"    "0"
+  set_config_value "$simplessd_cfg" "EnableWriteCache"   "0"
 
-  if [[ "$SWEEP_MODE" != "true" ]]; then echo "  -> $label"; fi
-
-  local summary="$tmp/summary.log"
-  local start_time end_time elapsed_s start_iso end_iso duration_fmt
-
-  # Run the simulator in the background at lowest priority to prevent CPU lockouts
-  nice -n 19 "$BINARY" "$tmp/standalone.cfg" "$tmp/simplessd.cfg" "$tmp/statprefix" \
-    > "$summary" 2>&1 &
-  local sim_pid=$!
-  start_time=$(date +%s)
+  # Record start time and run the simulator at low CPU priority (nice -n 19)
+  local start_sec end_sec elapsed_sec start_iso end_iso duration_fmt sim_status=0
+  start_sec=$(date +%s)
   start_iso=$(date -Iseconds 2>/dev/null || date)
 
-  local sim_status=0
-  wait "$sim_pid" || sim_status=$?
-  end_time=$(date +%s)
+  nice -n 19 "$BINARY" "$standalone_cfg" "$simplessd_cfg" "$tmp_dir/statprefix" > "$console_file" 2>&1 || sim_status=$?
+
+  end_sec=$(date +%s)
   end_iso=$(date -Iseconds 2>/dev/null || date)
-  elapsed_s=$(( end_time - start_time ))
-  duration_fmt=$(printf "%dm %02ds" $((elapsed_s/60)) $((elapsed_s%60)))
+  elapsed_sec=$(( end_sec - start_sec ))
+  duration_fmt=$(printf "%dm %02ds" $(( elapsed_sec / 60 )) $(( elapsed_sec % 60 )))
+
+  # Assemble the human-readable output file
+  local pol_label="LRU"
+  [[ "$pol" == "1" ]] && pol_label="LFU"
+  local wf_label="OFF"
+  [[ "$wf" == "true" ]] && wf_label="ON"
+  local win_label="N/A"
+  [[ "$wf" == "true" ]] && win_label="$win"
 
   {
     echo "=== SimpleSSD Simulation ==="
@@ -332,182 +271,217 @@ run_one() {
     echo "Workload        : $wl"
     echo "IO Size         : $ios"
     echo "Block Size      : $bs"
-    echo "CMT Policy      : $( [ "$pol" = "0" ] && echo "LRU" || echo "LFU" )"
+    echo "CMT Policy      : $pol_label"
     echo "CMT Capacity    : $cmt_b Bytes"
-    echo "Window Fill     : $( [ "$pref" = "true" ] && echo "ON" || echo "OFF" )"
-    if [ "$pref" = "true" ]; then
-      echo "Window Size     : $win"
-    else
-      echo "Window Size     : N/A"
-    fi
+    echo "Window Fill     : $wf_label"
+    echo "Window Size     : $win_label"
     echo "Eviction Policy : $evict"
     echo "Fill Ratio      : $fill"
     echo "============================="
     echo ""
     echo "--- Performance ---"
-    printf  "Wall Time       : %dm %02ds\n" $((elapsed_s/60)) $((elapsed_s%60))
+    echo "Wall Time       : $duration_fmt"
     echo ""
     echo "=== SUBSYSTEM STATS ==="
-    if [[ -f "$statsfile" && -s "$statsfile" ]]; then
-      # Strip out the periodic log banners to only show final stats
+    if [[ -s "$stats_file" ]]; then
+      # Keep only the final periodic stats printout block
       awk '/Periodic log printout/{flag=1; buf=""}
            !/Periodic log printout/ && !/End of log/{if(flag) buf = buf $0 "\n"}
            /End of log/{flag=0}
-           END{print buf}' "$statsfile" || cat "$statsfile"
+           END{print buf}' "$stats_file" || cat "$stats_file"
     else
       echo "(WARNING: stats file empty or missing)"
     fi
     echo ""
     echo "=== RUN SUMMARY ==="
-    sed -e 's/\x1b\[[0-9;]*[A-Za-z]//g' -e 's/\r$//' "$summary"
+    sed -e 's/\x1b\[[0-9;]*[A-Za-z]//g' -e 's/\r$//' "$console_file"
     echo ""
     echo "Finished: $(date)"
   } > "$outfile"
 
-  local final_hit final_acc elapsed_fmt
-  final_hit=$(grep "cmt\.hit_rate" "$outfile" 2>/dev/null | tail -n1 | awk '{printf "%.2f", $2}' || true)
-  final_acc=$(grep "fill_accuracy_percent" "$outfile" 2>/dev/null | tail -n1 | awk '{printf "%.1f", $2}' || true)
+  # Extract hit rate and window-fill accuracy from the final log
+  local final_hit final_acc job_status="DONE"
+  final_hit=$(grep "cmt\.hit_rate" "$outfile" 2>/dev/null | tail -n 1 | awk '{printf "%.2f", $2}' || true)
+  final_acc=$(grep "fill_accuracy_percent" "$outfile" 2>/dev/null | tail -n 1 | awk '{printf "%.1f", $2}' || true)
 
-  local job_status="DONE"
-  if [[ $sim_status -ne 0 || -z "$final_hit" || "$final_hit" == "N/A" ]]; then
+  if [[ $sim_status -ne 0 || -z "$final_hit" ]]; then
     job_status="FAILED"
     final_hit="${final_hit:-N/A}"
     final_acc="${final_acc:-N/A}"
   fi
 
-  # Write machine-readable metadata so analyze_outputs.py doesn't need to
-  # parse filenames (and stays in sync with run.sh automatically).
-  local metafile="${outfile%.txt}.meta.json"
-  local compiler_ver
-  compiler_ver=$("${CXX:-c++}" --version 2>/dev/null | head -n1 | sed -e 's/["\\]//g' || echo "unknown")
-  {
-    printf '{\n'
-    printf '  "label": "%s",\n'       "$label"
-    printf '  "workload": "%s",\n'   "$wl"
-    printf '  "io_size": "%s",\n'    "$ios"
-    printf '  "block_size": "%s",\n' "$bs"
-    printf '  "cmt_bytes": %s,\n'    "$cmt_b"
-    printf '  "cmt_policy": %s,\n'   "$pol"
-    printf '  "window_fill": %s,\n'  "$pref"
-    printf '  "window_size": %s,\n'  "$win"
-    printf '  "fill_ratio": %s,\n'   "$fill"
-    printf '  "evict_policy": %s,\n' "$evict"
-    printf '  "io_depth": %s,\n'     "$iodepth"
-    printf '  "rw_mix_read": %s,\n'  "$rwmix"
-    printf '  "warmup_seed": %s,\n'  "$WARMUP_SEED"
-    printf '  "start_time": "%s",\n'   "$start_iso"
-    printf '  "end_time": "%s",\n'     "$end_iso"
-    printf '  "duration": "%s",\n'     "$duration_fmt"
-    printf '  "duration_seconds": %s,\n' "$elapsed_s"
-    printf '  "wall_secs": %s,\n'    "$elapsed_s"
-    printf '  "status": "%s",\n'     "$job_status"
-    printf '  "compiler": "%s",\n'   "$compiler_ver"
-    printf '  "git_commit": "%s",\n' "$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-    printf '  "hostname": "%s"\n'    "$(hostname -s 2>/dev/null || echo unknown)"
-    printf '}\n'
-  } > "$metafile"
+  # Write the .meta.json file used by analyze_outputs.py
+  local compiler_ver git_sha host_name
+  compiler_ver=$("${CXX:-c++}" --version 2>/dev/null | head -n 1 | tr -d '"\\' || echo "unknown")
+  git_sha=$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+  host_name=$(hostname -s 2>/dev/null || echo "unknown")
 
-  rm -rf "$tmp"
+  cat <<EOF > "$metafile"
+{
+  "label": "$label",
+  "workload": "$wl",
+  "io_size": "$ios",
+  "block_size": "$bs",
+  "cmt_bytes": $cmt_b,
+  "cmt_policy": $pol,
+  "window_fill": $wf,
+  "window_size": $win,
+  "fill_ratio": $fill,
+  "evict_policy": $evict,
+  "io_depth": $iodepth,
+  "rw_mix_read": $rwmix,
+  "warmup_seed": $WARMUP_SEED,
+  "start_time": "$start_iso",
+  "end_time": "$end_iso",
+  "duration": "$duration_fmt",
+  "duration_seconds": $elapsed_sec,
+  "wall_secs": $elapsed_sec,
+  "status": "$job_status",
+  "compiler": "$compiler_ver",
+  "git_commit": "$git_sha",
+  "hostname": "$host_name"
+}
+EOF
 
-  # Append one row to the sweep summary (flock for safe concurrent writes from parallel jobs)
+  # Clean up temporary directory
+  rm -rf "$tmp_dir"
+
+  # Append a summary line if running a sweep
   if [[ -n "${SWEEP_SUMMARY_FILE:-}" ]]; then
-    elapsed_fmt=$(printf "%dm%02ds" $((elapsed_s/60)) $((elapsed_s%60)))
-    flock "$SWEEP_SUMMARY_FILE" \
-      printf "%-70s  %7s  %8s  %7s  %s\n" \
-      "$label" "$elapsed_fmt" "${final_hit}%" "${final_acc}%" "$job_status" \
-      >> "$SWEEP_SUMMARY_FILE"
+    local short_time
+    short_time=$(printf "%dm%02ds" $(( elapsed_sec / 60 )) $(( elapsed_sec % 60 )))
+    printf "%-70s  %7s  %8s  %7s  %s\n" \
+      "$label" "$short_time" "${final_hit}%" "${final_acc}%" "$job_status" >> "$SWEEP_SUMMARY_FILE"
   fi
 
   if [[ "$job_status" == "FAILED" ]]; then
-    echo "  [ERROR] Simulation failed for $label (exit code $sim_status). Log: $outfile"
+    echo "  [FAIL]  $label (exit code $sim_status) -> $outfile"
     return 1
-  elif [[ "$SWEEP_MODE" != "true" ]]; then
-    if [[ "$final_hit" != "N/A" ]]; then
-      printf "     CMT hit rate: %s%%   window-fill accuracy: %s%%\n" "$final_hit" "$final_acc"
-    fi
-    echo "     Log: $outfile"
+  else
+    echo "  [DONE]  $label | Time: $duration_fmt | Hit Rate: ${final_hit}% | Fill Acc: ${final_acc}%"
+    return 0
   fi
-  return 0
 }
 
-# ── Test mode ─────────────────────────────────────────────────────────────────
-# A/B invariants (same CMT size, fill, and I/O size):
-#   sequential read: WF_ON misses drop vs WF_OFF; accuracy should be high
-#   random read:     WF_ON may pollute more; writebacks must not explode
-#   sequential write (fill=1.0): GC misses must not drive fill_triggers
-if [[ "$TEST_MODE" == "true" ]]; then
-  echo "SimpleSSD -- PF validation (sequential / random / GC-ish write)"
-  echo ""
 
-  TEST_WINDOW="${WINDOW_SIZE:-512}"
-  TEST_CMT="${CMT_BYTES:-2097152}"
-  TEST_IOS="${IO_SIZE:-512M}"
-  TEST_FAIL=0
+# =============================================================================
+# SECTION 4: MAIN EXECUTION LOGIC
+# =============================================================================
 
-  run_one "read"     "$TEST_CMT" "4K" "0" "false" "$TEST_WINDOW" "1.0" "$TEST_IOS" "32" "0.5" "0" || TEST_FAIL=1
-  run_one "read"     "$TEST_CMT" "4K" "0" "true"  "$TEST_WINDOW" "1.0" "$TEST_IOS" "32" "0.5" "0" || TEST_FAIL=1
-  run_one "randread" "$TEST_CMT" "4K" "0" "false" "$TEST_WINDOW" "1.0" "$TEST_IOS" "32" "0.5" "0" || TEST_FAIL=1
-  run_one "randread" "$TEST_CMT" "4K" "0" "true"  "$TEST_WINDOW" "1.0" "$TEST_IOS" "32" "0.5" "0" || TEST_FAIL=1
-  run_one "read"     "$TEST_CMT" "4K" "1" "false" "$TEST_WINDOW" "1.0" "$TEST_IOS" "32" "0.5" "0" || TEST_FAIL=1
-  run_one "read"     "$TEST_CMT" "4K" "1" "true"  "$TEST_WINDOW" "1.0" "$TEST_IOS" "32" "0.5" "0" || TEST_FAIL=1
-  run_one "write"    "$TEST_CMT" "4K" "0" "false" "$TEST_WINDOW" "1.0" "$TEST_IOS" "32" "0.5" "0" || TEST_FAIL=1
-  run_one "write"    "$TEST_CMT" "4K" "0" "true"  "$TEST_WINDOW" "1.0" "$TEST_IOS" "32" "0.5" "0" || TEST_FAIL=1
-
-  echo ""
-  echo "Checking window-fill stat invariants..."
-  for f in "$OUTPUT_DIR"/*.txt; do
-    ins=$(awk '/fill_insertions/ {print $2}' "$f" | cut -d. -f1)
-    if [[ "$f" == *"WF_OFF"* ]] && (( ins > 0 )); then
-      echo "FAIL: $f (WF_OFF has insertions)"
-      TEST_FAIL=1
-    fi
-  done
-  seq_off=$(ls "$OUTPUT_DIR"/read_LRU_WF_OFF_*.txt 2>/dev/null | tail -n1 || true)
-  seq_on=$(ls "$OUTPUT_DIR"/read_LRU_WF_ON_*.txt 2>/dev/null | tail -n1 || true)
-  if [[ -n "$seq_off" && -n "$seq_on" ]]; then
-    moff=$(awk '/cmt.misses/ {print $2}' "$seq_off" | cut -d. -f1)
-    mon=$(awk '/cmt.misses/ {print $2}' "$seq_on" | cut -d. -f1)
-    if (( mon >= moff )); then
-      echo "FAIL: sequential misses did not drop ($moff -> $mon)"
-      TEST_FAIL=1
-    else
-      echo "PASS A/B (sequential)"
-    fi
-  fi
-
-  echo ""
-  if (( TEST_FAIL > 0 )); then
-    echo "ERROR: Test validation failed."
-    exit 1
-  fi
-  echo "Test done."
+# --- Mode 1: Kill running simulations ---
+if [[ "$MODE" == "kill" ]]; then
+  echo "Stopping all running SimpleSSD simulations..."
+  pkill -9 -f "simplessd-standalone" 2>/dev/null || true
+  echo "Done."
   exit 0
 fi
 
-# ── Sweep mode ────────────────────────────────────────────────────────────────
-if [[ "$SWEEP_MODE" == "true" ]]; then
+# --- Mode 2: Clean temporary directories ---
+if [[ "$MODE" == "clean" ]]; then
+  echo "Removing temporary .sim_tmp_* folders..."
+  rm -rf "$SCRIPT_DIR"/.sim_tmp_*
+  echo "Done."
+  exit 0
+fi
+
+# Check that base config files exist before building
+if [[ ! -f "$BASE_CFG" ]]; then echo "ERROR: Missing $BASE_CFG"; exit 1; fi
+if [[ ! -f "$SSD_CFG"  ]]; then echo "ERROR: Missing $SSD_CFG";  exit 1; fi
+
+# Always build the simulator before running single, test, or sweep mode
+build_simulator
+mkdir -p "$OUTPUT_DIR"
+
+# --- Mode 3: Single simulation run ---
+if [[ "$MODE" == "single" ]]; then
+  echo "Running single simulation..."
+  run_one_simulation \
+    "$WORKLOAD" "$CMT_BYTES" "$BLOCK_SIZE" "$CMT_POLICY" \
+    "$WINDOW_FILL" "$WINDOW_SIZE" "$FILL_RATIO" \
+    "$IO_SIZE" "$IO_DEPTH" "$RW_MIX_READ" "$EVICT_POLICY"
+  echo "Finished single run. Output saved in: $OUTPUT_DIR/"
+  exit 0
+fi
+
+# --- Mode 4: Validation test mode (8 short runs) ---
+if [[ "$MODE" == "test" ]]; then
+  echo "Running window-fill validation suite (8 jobs)..."
+  TEST_CMT=2097152
+  TEST_IOS="512M"
+  TEST_FAIL=0
+
+  run_one_simulation "read"     "$TEST_CMT" "4K" "0" "false" "$WINDOW_SIZE" "1.0" "$TEST_IOS" "32" "0.5" "0" || TEST_FAIL=1
+  run_one_simulation "read"     "$TEST_CMT" "4K" "0" "true"  "$WINDOW_SIZE" "1.0" "$TEST_IOS" "32" "0.5" "0" || TEST_FAIL=1
+  run_one_simulation "randread" "$TEST_CMT" "4K" "0" "false" "$WINDOW_SIZE" "1.0" "$TEST_IOS" "32" "0.5" "0" || TEST_FAIL=1
+  run_one_simulation "randread" "$TEST_CMT" "4K" "0" "true"  "$WINDOW_SIZE" "1.0" "$TEST_IOS" "32" "0.5" "0" || TEST_FAIL=1
+  run_one_simulation "read"     "$TEST_CMT" "4K" "1" "false" "$WINDOW_SIZE" "1.0" "$TEST_IOS" "32" "0.5" "0" || TEST_FAIL=1
+  run_one_simulation "read"     "$TEST_CMT" "4K" "1" "true"  "$WINDOW_SIZE" "1.0" "$TEST_IOS" "32" "0.5" "0" || TEST_FAIL=1
+  run_one_simulation "write"    "$TEST_CMT" "4K" "0" "false" "$WINDOW_SIZE" "1.0" "$TEST_IOS" "32" "0.5" "0" || TEST_FAIL=1
+  run_one_simulation "write"    "$TEST_CMT" "4K" "0" "true"  "$WINDOW_SIZE" "1.0" "$TEST_IOS" "32" "0.5" "0" || TEST_FAIL=1
+
+  echo ""
+  echo "Checking validation invariants..."
+
+  # Check 1: WF_OFF runs must have 0 window-fill insertions
+  for f in "$OUTPUT_DIR"/*WF_OFF*.txt; do
+    [[ -f "$f" ]] || continue
+    ins=$(awk '/fill_insertions/ {print $2}' "$f" | cut -d. -f1)
+    if [[ -n "$ins" ]] && (( ins > 0 )); then
+      echo "FAIL: WF_OFF log has non-zero fill_insertions ($ins): $f"
+      TEST_FAIL=1
+    fi
+  done
+
+  # Check 2: Sequential read misses should drop when Window Fill is enabled
+  seq_off=$(ls -t "$OUTPUT_DIR"/read_LRU_WF_OFF_*.txt 2>/dev/null | head -n 1 || true)
+  seq_on=$(ls -t "$OUTPUT_DIR"/read_LRU_WF_ON_*.txt  2>/dev/null | head -n 1 || true)
+  if [[ -n "$seq_off" && -n "$seq_on" ]]; then
+    misses_off=$(awk '/cmt\.misses/ {print $2}' "$seq_off" | cut -d. -f1)
+    misses_on=$(awk '/cmt\.misses/ {print $2}'  "$seq_on"  | cut -d. -f1)
+    if (( misses_on >= misses_off )); then
+      echo "FAIL: Sequential read misses did not decrease ($misses_off -> $misses_on)"
+      TEST_FAIL=1
+    else
+      echo "PASS: Sequential read misses decreased from $misses_off to $misses_on"
+    fi
+  fi
+
+  if (( TEST_FAIL > 0 )); then
+    echo "ERROR: One or more validation checks failed."
+    exit 1
+  fi
+  echo "All validation tests passed!"
+  exit 0
+fi
+
+# --- Mode 5: Parameter sweep mode ---
+if [[ "$MODE" == "sweep" ]]; then
   OUTPUT_DIR="${OUTPUT_DIR}/sweep_$(date +%b%d_%I-%M%p)"
   mkdir -p "$OUTPUT_DIR"
+  SWEEP_SUMMARY_FILE="$OUTPUT_DIR/sweep_summary.txt"
 
-  echo "SimpleSSD -- sweep mode"
-  echo "  Output dir   : $OUTPUT_DIR"
-  echo "  Max parallel : $MAX_PARALLEL"
-  echo ""
-
-  # Calculate total jobs and build jobs array
-  jobs_to_run=()
+  # Build the list of all job combinations
+  jobs_list=()
   for ios in "${SWEEP_IO_SIZES[@]}"; do
     for fill in "${SWEEP_FILL_RATIOS[@]}"; do
       for wl in "${SWEEP_WORKLOADS[@]}"; do
-        if [[ "$wl" == "randrw" ]]; then mixes=( "${SWEEP_RW_MIX_READ[@]}" ); else mixes=( "0.5" ); fi
-        for rwmix in "${mixes[@]}"; do
+        if [[ "$wl" == "randrw" ]]; then
+          mix_list=( "${SWEEP_RW_MIX_READ[@]}" )
+        else
+          mix_list=( "0.5" )
+        fi
+        for rwmix in "${mix_list[@]}"; do
           for cmt_b in "${SWEEP_CMT_BYTES[@]}"; do
             for bs in "${SWEEP_BLOCK_SIZES[@]}"; do
               for pol in "${SWEEP_CMT_POLICIES[@]}"; do
-                for pref in "${SWEEP_WINDOW_FILL[@]}"; do
-                  if [[ "$pref" == "false" ]]; then windows=( "${SWEEP_WINDOW_SIZES[0]}" ); else windows=( "${SWEEP_WINDOW_SIZES[@]}" ); fi
-                  for win in "${windows[@]}"; do
-                    jobs_to_run+=("$wl $cmt_b $bs $pol $pref $win $fill $ios $SWEEP_IO_DEPTH $rwmix $SWEEP_EVICT_POLICY")
+                for wf in "${SWEEP_WINDOW_FILL[@]}"; do
+                  if [[ "$wf" == "false" ]]; then
+                    win_list=( "${SWEEP_WINDOW_SIZES[0]}" )
+                  else
+                    win_list=( "${SWEEP_WINDOW_SIZES[@]}" )
+                  fi
+                  for win in "${win_list[@]}"; do
+                    jobs_list+=( "$wl $cmt_b $bs $pol $wf $win $fill $ios $SWEEP_IO_DEPTH $rwmix $SWEEP_EVICT_POLICY" )
                   done
                 done
               done
@@ -518,140 +492,76 @@ if [[ "$SWEEP_MODE" == "true" ]]; then
     done
   done
 
-  TOTAL_JOBS=${#jobs_to_run[@]}
-  echo "  Total Jobs   : $TOTAL_JOBS"
+  TOTAL_JOBS=${#jobs_list[@]}
+  echo "Starting sweep of $TOTAL_JOBS jobs (up to $MAX_PARALLEL in parallel)"
+  echo "Output folder: $OUTPUT_DIR"
   echo ""
 
-  # Initialise the sweep summary file with a header
-  SWEEP_SUMMARY_FILE="$OUTPUT_DIR/sweep_summary.txt"
-  export SWEEP_SUMMARY_FILE
-  SWEEP_START_TIME=$(date +%s)
+  # Write header for sweep_summary.txt
+  SWEEP_START_SEC=$(date +%s)
   {
     echo "=== SimpleSSD Sweep Summary ==="
     echo "Started    : $(date)"
     echo "Output Dir : $OUTPUT_DIR"
     echo "Total Jobs : $TOTAL_JOBS"
     echo ""
-    printf "%-70s  %7s  %8s  %7s  %s\n" \
-      "Label" "Time" "CMT Hit%" "Fill Acc%" "Status"
-    printf '%s\n' "$(printf '%.0s-' {1..120})"
+    printf "%-70s  %7s  %8s  %7s  %s\n" "Label" "Time" "CMT Hit%" "Fill Acc%" "Status"
+    printf '%.0s-' {1..110}
+    echo ""
   } > "$SWEEP_SUMMARY_FILE"
 
-  local compiler_ver
-  compiler_ver=$("${CXX:-c++}" --version 2>/dev/null | head -n1 | sed -e 's/["\\]//g' || echo "unknown")
-  local git_sha
+  # Write sweep metadata file
+  compiler_ver=$("${CXX:-c++}" --version 2>/dev/null | head -n 1 | tr -d '"\\' || echo "unknown")
   git_sha=$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
-  {
-    printf '{\n'
-    printf '  "type": "sweep",\n'
-    printf '  "git_commit": "%s",\n' "$git_sha"
-    printf '  "compiler": "%s",\n'   "$compiler_ver"
-    printf '  "hostname": "%s",\n'   "$(hostname -s 2>/dev/null || echo unknown)"
-    printf '  "started": "%s",\n'    "$(date -Iseconds 2>/dev/null || date)"
-    printf '  "total_jobs": %d,\n'   "$TOTAL_JOBS"
-    printf '  "max_parallel": %d\n'  "$MAX_PARALLEL"
-    printf '}\n'
-  } > "$OUTPUT_DIR/run_metadata.json"
+  host_name=$(hostname -s 2>/dev/null || echo "unknown")
+  cat <<EOF > "$OUTPUT_DIR/run_metadata.json"
+{
+  "type": "sweep",
+  "git_commit": "$git_sha",
+  "compiler": "$compiler_ver",
+  "hostname": "$host_name",
+  "started": "$(date -Iseconds 2>/dev/null || date)",
+  "total_jobs": $TOTAL_JOBS,
+  "max_parallel": $MAX_PARALLEL
+}
+EOF
 
-  # Start the progress poller in the background
-  (
-    sweep_start=$(date +%s)
-    prev_completed=0
-    while true; do
-      sleep 5
-      completed=$(find "$OUTPUT_DIR" -maxdepth 1 -name "*.txt" ! -name "sweep_summary.txt" 2>/dev/null | wc -l)
-      pct=$(awk -v c="$completed" -v t="$TOTAL_JOBS" 'BEGIN {printf "%.1f", (c / t) * 100}')
-      elapsed=$(( $(date +%s) - sweep_start ))
-
-      eta_str="--:--"
-      if [[ "$completed" -gt 0 && "$completed" -lt "$TOTAL_JOBS" ]]; then
-        eta=$(( (elapsed / completed) * (TOTAL_JOBS - completed) ))
-        eta_str=$(printf "%02dm %02ds" $((eta/60)) $((eta%60)))
-      fi
-
-      latest_hr="N/A"
-      latest_file=$(find "$OUTPUT_DIR" -maxdepth 1 -name "*.txt" ! -name "sweep_summary.txt" -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1 | cut -d' ' -f2-)
-      if [[ -n "$latest_file" && -f "$latest_file" ]]; then
-        latest_hr=$(grep 'cmt\.hit_rate' "$latest_file" | tail -n1 | awk '{printf "%.2f", $2}')
-        latest_hr="${latest_hr:-N/A}"
-      fi
-
-      printf "\r\033[K[ %3ds ] Sweep: %3d / %3d ( %5.1f%% ) | ETA: %-9s | Last HR: %s%%" \
-             "$elapsed" "$completed" "$TOTAL_JOBS" "$pct" "$eta_str" "$latest_hr"
-
-      if [[ "$completed" -ge "$TOTAL_JOBS" ]]; then break; fi
-      prev_completed=$completed
+  # Launch jobs, waiting whenever MAX_PARALLEL background jobs are already running
+  for job_args in "${jobs_list[@]}"; do
+    while (( $(jobs -rp | wc -l) >= MAX_PARALLEL )); do
+      wait -n 2>/dev/null || true
     done
-    printf "\n"
-  ) &
-  POLLER_PID=$!
-
-  workers=()
-  for job_args in "${jobs_to_run[@]}"; do
-    if (( ${#workers[@]} >= MAX_PARALLEL )); then
-      wait -n "${workers[@]}" 2>/dev/null || true
-      alive=()
-      for pid in "${workers[@]}"; do
-        if kill -0 "$pid" 2>/dev/null; then
-          alive+=("$pid")
-        fi
-      done
-      workers=("${alive[@]}")
-    fi
     # shellcheck disable=SC2086
-    run_one $job_args &
-    workers+=("$!")
+    run_one_simulation $job_args &
   done
 
-  # Wait for all remaining worker simulations to finish
-  if (( ${#workers[@]} > 0 )); then
-    wait "${workers[@]}" 2>/dev/null || true
-  fi
+  # Wait for all remaining background jobs to finish
+  wait
 
-  # Terminate and wait for progress poller
-  kill "$POLLER_PID" 2>/dev/null || true
-  wait "$POLLER_PID" 2>/dev/null || true
-
-  # Write the sweep totals footer
-  SWEEP_END_TIME=$(date +%s)
-  SWEEP_ELAPSED=$(( SWEEP_END_TIME - SWEEP_START_TIME ))
-  DONE_COUNT=$(grep -c " DONE$" "$SWEEP_SUMMARY_FILE" || echo 0)
-  SKIP_COUNT=$(grep -c " SKIPPED$" "$SWEEP_SUMMARY_FILE" || echo 0)
+  # Write totals footer to sweep_summary.txt
+  SWEEP_ELAPSED=$(( $(date +%s) - SWEEP_START_SEC ))
+  DONE_COUNT=$(grep -c " DONE$" "$SWEEP_SUMMARY_FILE" || true)
+  SKIP_COUNT=$(grep -c " SKIPPED$" "$SWEEP_SUMMARY_FILE" || true)
   FAIL_COUNT=$(( TOTAL_JOBS - DONE_COUNT - SKIP_COUNT ))
-  SLOWEST=$(grep " DONE$" "$SWEEP_SUMMARY_FILE" | awk 'BEGIN{max=0} {split($2,a,"m"); s=a[1]*60+a[2]; if(s>max){max=s; line=$0}} END{print line}')
-  FASTEST=$(grep " DONE$" "$SWEEP_SUMMARY_FILE" | awk 'BEGIN{min=999999} {split($2,a,"m"); s=a[1]*60+a[2]; if(s<min){min=s; line=$0}} END{print line}')
-  CPU_HOURS=$(grep " DONE$" "$SWEEP_SUMMARY_FILE" | awk '{split($2,a,"m"); s=a[1]*60+a[2]; sum+=s} END {printf "%.1f", sum/3600}')
+
   {
-    printf '%s\n' "$(printf '%.0s-' {1..120})"
+    printf '%.0s-' {1..110}
     echo ""
     echo "=== Sweep Totals ==="
     echo "Finished    : $(date)"
-    printf "Wall Time   : %dh %02dm %02ds\n" $((SWEEP_ELAPSED/3600)) $(( (SWEEP_ELAPSED%3600)/60 )) $((SWEEP_ELAPSED%60))
+    printf "Wall Time   : %dh %02dm %02ds\n" $(( SWEEP_ELAPSED / 3600 )) $(( (SWEEP_ELAPSED % 3600) / 60 )) $(( SWEEP_ELAPSED % 60 ))
     echo "Total Jobs  : $TOTAL_JOBS  ($DONE_COUNT done, $SKIP_COUNT skipped, $FAIL_COUNT failed)"
-    echo "CPU-Hours   : $CPU_HOURS"
-    echo "Slowest Job : $(echo "$SLOWEST" | awk '{print $1, $2}')"
-    echo "Fastest Job : $(echo "$FASTEST" | awk '{print $1, $2}')"
     echo "================================"
   } >> "$SWEEP_SUMMARY_FILE"
 
   echo ""
-  echo "All done. Logs in: $OUTPUT_DIR/"
-  echo "Summary  : $SWEEP_SUMMARY_FILE"
+  echo "Sweep complete! Summary saved to: $SWEEP_SUMMARY_FILE"
   if (( FAIL_COUNT > 0 )); then
-    echo "ERROR: $FAIL_COUNT job(s) failed. Check the summary above for details."
+    echo "ERROR: $FAIL_COUNT job(s) failed."
     exit 1
   fi
   exit 0
 fi
 
-# ── Single-run mode ───────────────────────────────────────────────────────────
-echo "SimpleSSD -- single run"
-echo ""
-if ! run_one "$WORKLOAD" "$CMT_BYTES" "$BLOCK_SIZE" "$CMT_POLICY" \
-        "$WINDOW_FILL" "$WINDOW_SIZE" "$FILL_RATIO" \
-        "$IO_SIZE" "$IO_DEPTH" "$RW_MIX_READ" "$EVICT_POLICY"; then
-  echo "ERROR: Simulation run failed."
-  exit 1
-fi
-echo ""
-echo "Done."
+echo "ERROR: Unknown MODE='$MODE'. Use 'single', 'sweep', 'test', 'kill', or 'clean'."
+exit 1
