@@ -265,6 +265,7 @@ void PageMapping::resetCMTStats() {
   stat.cmtFillHits = 0;
   stat.cmtFillEvictedUnused = 0;
   stat.cmtFillTriggers = 0;
+  lastUserDemandLpn = std::numeric_limits<uint64_t>::max();
 
   // Clear fillOrigin on all resident entries so warmup window-fills
   // don't leak into measurement stats (which would cause accuracy > 100%).
@@ -355,12 +356,14 @@ bool PageMapping::initialize() {
     // Random
     // We can successfully restrict range of LPN to create exact number of
     // invalid pages because we wrote in sequential mannor in step 1.
-    std::uniform_int_distribution<uint64_t> dist(0, nPagesToWarmup - 1);
+    if (nPagesToWarmup > 0) {
+      std::uniform_int_distribution<uint64_t> dist(0, nPagesToWarmup - 1);
 
-    for (uint64_t i = 0; i < nPagesToInvalidate; i++) {
-      tick = 0;
-      req.lpn = dist(rng_);
-      writeInternal(req, tick, false);
+      for (uint64_t i = 0; i < nPagesToInvalidate; i++) {
+        tick = 0;
+        req.lpn = dist(rng_);
+        writeInternal(req, tick, false);
+      }
     }
   }
   else {
@@ -642,11 +645,15 @@ void PageMapping::calculateVictimWeight(
           continue;
         }
 
-        temp = (float)(iter.second.getValidPageCountRaw()) / param.pagesInBlock;
+        temp = (float)(iter.second.getValidPageCountRaw()) /
+               (float)(param.pagesInBlock * param.ioUnitInPage);
+        uint64_t lastTime = iter.second.getLastAccessedTime();
+        uint64_t age = (tick > lastTime) ? (tick - lastTime) : 1;
+        float denom = (1.0f - temp) * (float)age;
+        float w = (denom > 0.0f) ? (temp / denom)
+                                 : std::numeric_limits<float>::max();
 
-        weight.push_back(
-            {iter.first,
-             temp / ((1 - temp) * (tick - iter.second.getLastAccessedTime()))});
+        weight.push_back({iter.first, w});
       }
 
       break;
@@ -657,11 +664,11 @@ void PageMapping::calculateVictimWeight(
 
 void PageMapping::selectVictimBlock(std::vector<uint32_t> &list,
                                     uint64_t &tick) {
-  static const GC_MODE mode = (GC_MODE)conf.readInt(CONFIG_FTL, FTL_GC_MODE);
-  static const EVICT_POLICY policy =
+  const GC_MODE mode = (GC_MODE)conf.readInt(CONFIG_FTL, FTL_GC_MODE);
+  const EVICT_POLICY policy =
       (EVICT_POLICY)conf.readInt(CONFIG_FTL, FTL_GC_EVICT_POLICY);
-  static uint32_t dChoiceParam =
-      conf.readUint(CONFIG_FTL, FTL_GC_D_CHOICE_PARAM);
+  uint32_t dChoiceParam =
+      (uint32_t)conf.readUint(CONFIG_FTL, FTL_GC_D_CHOICE_PARAM);
   uint64_t nBlocks = conf.readUint(CONFIG_FTL, FTL_GC_RECLAIM_BLOCK);
   std::vector<std::pair<uint32_t, float>> weight;
 
@@ -672,9 +679,12 @@ void PageMapping::selectVictimBlock(std::vector<uint32_t> &list,
     // DO NOTHING
   }
   else if (mode == GC_MODE_1) {
-    static const float t = conf.readFloat(CONFIG_FTL, FTL_GC_RECLAIM_THRESHOLD);
+    const float t = conf.readFloat(CONFIG_FTL, FTL_GC_RECLAIM_THRESHOLD);
+    float targetBlocks = (float)param.totalPhysicalBlocks * t;
 
-    nBlocks = param.totalPhysicalBlocks * t - nFreeBlocks;
+    nBlocks = (targetBlocks > (float)nFreeBlocks)
+                  ? (uint64_t)(targetBlocks - (float)nFreeBlocks)
+                  : 0;
   }
   else {
     panic("Invalid GC mode");
@@ -690,9 +700,15 @@ void PageMapping::selectVictimBlock(std::vector<uint32_t> &list,
   // Calculate weights of all blocks
   calculateVictimWeight(weight, policy, tick);
 
+  if (weight.empty()) {
+    tick += applyLatency(CPU::FTL__PAGE_MAPPING, CPU::SELECT_VICTIM_BLOCK);
+    return;
+  }
+
   if (policy == POLICY_RANDOM || policy == POLICY_DCHOICE) {
     uint64_t randomRange =
         policy == POLICY_RANDOM ? nBlocks : dChoiceParam * nBlocks;
+    randomRange = MIN(randomRange, (uint64_t)weight.size());
     std::uniform_int_distribution<uint64_t> dist(0, weight.size() - 1);
     std::vector<std::pair<uint32_t, float>> selected;
 
@@ -735,10 +751,39 @@ void PageMapping::doGarbageCollection(std::vector<uint32_t> &blocksToReclaim,
   std::vector<PAL::Request> eraseRequests;
   std::vector<uint64_t> lpns;
   Bitset bit(param.ioUnitInPage);
-  uint64_t beginAt;
+  uint64_t beginAt = tick;
   uint64_t readFinishedAt = tick;
   uint64_t writeFinishedAt = tick;
   uint64_t eraseFinishedAt = tick;
+
+  if (blocksToReclaim.size() == 0) {
+    return;
+  }
+
+  // Rotate any active lastFreeBlock entry that is about to be reclaimed
+  // so GC never relocates valid pages into a victim block itself or leaves
+  // a dangling erased block ID in lastFreeBlock.
+  for (uint32_t i = 0; i < param.pageCountToMaxPerf; i++) {
+    if (std::find(blocksToReclaim.begin(), blocksToReclaim.end(),
+                  lastFreeBlock.at(i)) != blocksToReclaim.end()) {
+      if (nFreeBlocks > 0) {
+        lastFreeBlock.at(i) = getFreeBlock(i);
+        if (i == lastFreeBlockIndex) {
+          lastFreeBlockIOMap.reset();
+        }
+      }
+      else {
+        auto bIt = blocks.find(lastFreeBlock.at(i));
+        if (bIt != blocks.end() && bIt->second.getValidPageCount() == 0) {
+          bIt->second.erase();
+        }
+        blocksToReclaim.erase(
+            std::remove(blocksToReclaim.begin(), blocksToReclaim.end(),
+                        lastFreeBlock.at(i)),
+            blocksToReclaim.end());
+      }
+    }
+  }
 
   if (blocksToReclaim.size() == 0) {
     return;
@@ -1109,6 +1154,9 @@ PageMapping::accessCMT_LRU(uint64_t lpn, bool isWrite, uint64_t &tick,
     if (it->second.first.fillUnused && !isGC) {
       it->second.first.fillUnused = false;
     }
+    if (!isGC) {
+      lastUserDemandLpn = lpn;
+    }
 
     return &it->second.first.mapping;
   }
@@ -1215,6 +1263,9 @@ PageMapping::accessCMT_LRU(uint64_t lpn, bool isWrite, uint64_t &tick,
   }
 
   // Window fill disabled (or GC path, or brand-new LPN): plain insert at MRU.
+  if (!isGC) {
+    lastUserDemandLpn = lpn;
+  }
   cmtOrder.push_front(lpn);
   auto insertResult = cmt.emplace(
       lpn,
@@ -1334,6 +1385,9 @@ PageMapping::accessCMT_LFU(uint64_t lpn, bool isWrite, uint64_t &tick,
     if (entry.fillUnused && !isGC) {
       entry.fillUnused = false;
     }
+    if (!isGC) {
+      lastUserDemandLpn = lpn;
+    }
 
     return &entry.mapping;
   }
@@ -1442,6 +1496,9 @@ PageMapping::accessCMT_LFU(uint64_t lpn, bool isWrite, uint64_t &tick,
   }
 
   // Window fill disabled (or GC path, or brand-new LPN): plain insert at freq=1.
+  if (!isGC) {
+    lastUserDemandLpn = lpn;
+  }
   // ── Insertion: new entry always starts at frequency = 1 ──────────────────
   cmtMinFreq = 1;
   cmtFreqBuckets[1].push_front(lpn);
@@ -1481,11 +1538,13 @@ void PageMapping::readInternal(Request &req, uint64_t &tick) {
   }
 
   if (hasValidMapping) {
-    if (bRandomTweak) {
-      pDRAM->read(mappingData, 8 * req.ioFlag.count(), tick);
-    }
-    else {
-      pDRAM->read(mappingData, 8, tick);
+    if (pDRAM) {
+      if (bRandomTweak) {
+        pDRAM->read(mappingData, 8 * req.ioFlag.count(), tick);
+      }
+      else {
+        pDRAM->read(mappingData, 8, tick);
+      }
     }
 
     for (uint32_t idx = 0; idx < bitsetSize; idx++) {
@@ -1569,7 +1628,7 @@ void PageMapping::writeInternal(Request &req, uint64_t &tick, bool sendToPAL) {
     panic("No such block");
   }
 
-  if (sendToPAL) {
+  if (sendToPAL && pDRAM) {
     if (bRandomTweak) {
       pDRAM->read(&mappingData, 8 * req.ioFlag.count(), tick);
       pDRAM->write(&mappingData, 8 * req.ioFlag.count(), tick);
@@ -1580,7 +1639,7 @@ void PageMapping::writeInternal(Request &req, uint64_t &tick, bool sendToPAL) {
     }
   }
 
-  if (!bRandomTweak && !req.ioFlag.all()) {
+  if (hadPreviousMapping && !bRandomTweak && !req.ioFlag.all()) {
     // We have to read old data
     readBeforeWrite = true;
   }
@@ -1597,7 +1656,9 @@ void PageMapping::writeInternal(Request &req, uint64_t &tick, bool sendToPAL) {
       // Read old data if needed (Only executed when bRandomTweak = false)
       // Maybe some other init procedures want to perform 'partial-write'
       // So check sendToPAL variable
-      if (readBeforeWrite && sendToPAL) {
+      if (readBeforeWrite && sendToPAL &&
+          mapping.first < param.totalPhysicalBlocks &&
+          mapping.second < param.pagesInBlock) {
         palRequest.blockIndex = mapping.first;
         palRequest.pageIndex = mapping.second;
 
@@ -1639,7 +1700,7 @@ void PageMapping::writeInternal(Request &req, uint64_t &tick, bool sendToPAL) {
 
   // GC if needed
   // I assumed that init procedure never invokes GC
-  static float gcThreshold = conf.readFloat(CONFIG_FTL, FTL_GC_THRESHOLD_RATIO);
+  float gcThreshold = conf.readFloat(CONFIG_FTL, FTL_GC_THRESHOLD_RATIO);
 
   if (freeBlockRatio() < gcThreshold) {
     if (!sendToPAL) {
@@ -1647,18 +1708,18 @@ void PageMapping::writeInternal(Request &req, uint64_t &tick, bool sendToPAL) {
     }
 
     std::vector<uint32_t> list;
-    uint64_t beginAt = tick;
+    uint64_t gcBeginAt = tick;
 
-    selectVictimBlock(list, beginAt);
+    selectVictimBlock(list, gcBeginAt);
 
     debugprint(LOG_FTL_PAGE_MAPPING,
-               "GC   | On-demand | %u blocks will be reclaimed", list.size());
+               "GC   | On-demand | %zu blocks will be reclaimed", list.size());
 
-    doGarbageCollection(list, beginAt);
+    doGarbageCollection(list, gcBeginAt);
 
     debugprint(LOG_FTL_PAGE_MAPPING,
                "GC   | Done | %" PRIu64 " - %" PRIu64 " (%" PRIu64 ")", tick,
-               beginAt, beginAt - tick);
+               gcBeginAt, gcBeginAt - tick);
 
     stat.gcCount++;
     stat.reclaimedBlocks += list.size();
@@ -1684,11 +1745,13 @@ void PageMapping::trimInternal(Request &req, uint64_t &tick) {
   }
 
   if (hasMappingData) {
-    if (bRandomTweak) {
-      pDRAM->read(mappingData, 8 * req.ioFlag.count(), tick);
-    }
-    else {
-      pDRAM->read(mappingData, 8, tick);
+    if (pDRAM) {
+      if (bRandomTweak) {
+        pDRAM->read(mappingData, 8 * req.ioFlag.count(), tick);
+      }
+      else {
+        pDRAM->read(mappingData, 8, tick);
+      }
     }
 
     // Do trim
@@ -1720,7 +1783,7 @@ void PageMapping::trimInternal(Request &req, uint64_t &tick) {
 }
 
 void PageMapping::eraseInternal(PAL::Request &req, uint64_t &tick) {
-  static uint64_t threshold =
+  uint64_t threshold =
       conf.readUint(CONFIG_FTL, FTL_BAD_BLOCK_THRESHOLD);
   auto block = blocks.find(req.blockIndex);
 
@@ -1742,26 +1805,31 @@ void PageMapping::eraseInternal(PAL::Request &req, uint64_t &tick) {
   uint32_t erasedCount = block->second.getEraseCount();
 
   if (erasedCount < threshold) {
-    // Reverse search
-    auto iter = freeBlocks.end();
-
-    while (true) {
-      iter--;
-
-      if (iter->getEraseCount() <= erasedCount) {
-        // emplace: insert before pos
-        iter++;
-
-        break;
-      }
-
-      if (iter == freeBlocks.begin()) {
-        break;
-      }
+    if (freeBlocks.empty()) {
+      freeBlocks.emplace_back(std::move(block->second));
     }
+    else {
+      // Reverse search
+      auto iter = freeBlocks.end();
 
-    // Insert block to free block list
-    freeBlocks.emplace(iter, std::move(block->second));
+      while (true) {
+        iter--;
+
+        if (iter->getEraseCount() <= erasedCount) {
+          // emplace: insert before pos
+          iter++;
+
+          break;
+        }
+
+        if (iter == freeBlocks.begin()) {
+          break;
+        }
+      }
+
+      // Insert block to free block list
+      freeBlocks.emplace(iter, std::move(block->second));
+    }
     nFreeBlocks++;
   }
 
@@ -1774,7 +1842,7 @@ void PageMapping::eraseInternal(PAL::Request &req, uint64_t &tick) {
 float PageMapping::calculateWearLeveling() {
   uint64_t totalEraseCnt = 0;
   uint64_t sumOfSquaredEraseCnt = 0;
-  uint64_t numOfBlocks = param.totalLogicalBlocks;
+  uint64_t numOfBlocks = param.totalPhysicalBlocks;
   uint64_t eraseCnt;
 
   for (auto &iter : blocks) {
@@ -1800,8 +1868,8 @@ float PageMapping::calculateWearLeveling() {
     return -1;  // no meaning of wear-leveling
   }
 
-  return (float)totalEraseCnt * totalEraseCnt /
-         (numOfBlocks * sumOfSquaredEraseCnt);
+  return (float)((double)totalEraseCnt * (double)totalEraseCnt /
+                 ((double)numOfBlocks * (double)sumOfSquaredEraseCnt));
 }
 
 void PageMapping::calculateTotalPages(uint64_t &valid, uint64_t &invalid) {
@@ -1954,10 +2022,13 @@ void PageMapping::getStatValues(std::vector<double> &values) {
   values.push_back((double)cmtSize());
 
   // Ponytail Bug #1 fix: account for resident fills at reporting time
-  uint64_t totalEvictedUnused = stat.cmtFillEvictedUnused + countResidentFills();
+  uint64_t totalEvictedUnused =
+      std::min(stat.cmtFillEvictedUnused + countResidentFills(),
+               stat.cmtFillInsertions);
 
   double fillAccuracy = stat.cmtFillInsertions > 0
-      ? (double)(stat.cmtFillInsertions - totalEvictedUnused) / (double)stat.cmtFillInsertions * 100.0
+      ? (double)(stat.cmtFillInsertions - totalEvictedUnused) /
+            (double)stat.cmtFillInsertions * 100.0
       : 0.0;
   
   double fillWasteRate = stat.cmtFillInsertions > 0
@@ -1984,6 +2055,7 @@ void PageMapping::getStatValues(std::vector<double> &values) {
 
 void PageMapping::resetStatValues() {
   memset(&stat, 0, sizeof(stat));
+  resetCMTStats();
 }
 
 }  // namespace FTL
