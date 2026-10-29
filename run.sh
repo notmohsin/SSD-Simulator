@@ -24,7 +24,7 @@ set -euo pipefail
 # =============================================================================
 
 # Choose what to run: "single", "sweep", "test", "kill", or "clean"
-MODE="single"
+MODE="sweep"
 
 # Workload type: "read", "write", "randread", "randwrite", or "randrw"
 WORKLOAD="randwrite"
@@ -65,7 +65,7 @@ WINDOW_FILL="false"
 WINDOW_SIZE=512
 
 # Random seed for warm-up (0 = random each run, any other number = reproducible)
-WARMUP_SEED=0
+WARMUP_SEED=42
 
 # Folder where output logs and JSON files will be saved
 OUTPUT_DIR="outputs"
@@ -75,22 +75,23 @@ OUTPUT_DIR="outputs"
 # SECTION 2: SWEEP SETTINGS (Used when MODE="sweep")
 # =============================================================================
 
-# Maximum number of simulations to run at the same time
-MAX_PARALLEL=4
+# Maximum number of simulations to run at the same time. The full matrix below
+# contains 5,376 jobs, so keep this conservative unless the host has ample RAM.
+MAX_PARALLEL=6
 
 # Lists of values to test (separate items with spaces inside parentheses)
-SWEEP_WORKLOADS=( "randread" "randwrite" "randrw" )
-SWEEP_CMT_BYTES=( 16777216 33554432 )
-SWEEP_BLOCK_SIZES=( "4K" )
+SWEEP_WORKLOADS=( "read" "write" "randread" "randwrite" "randrw" )
+SWEEP_CMT_BYTES=( 524288 2097152 16777216 )
+SWEEP_BLOCK_SIZES=( "4K" "16K" )
 SWEEP_CMT_POLICIES=( 0 1 )
-SWEEP_WINDOW_FILL=( "false" )
-SWEEP_WINDOW_SIZES=( 512 )
-SWEEP_FILL_RATIOS=( "0.8" )
-SWEEP_IO_SIZES=( "4G" )
-SWEEP_RW_MIX_READ=( "0.5" )
+SWEEP_WINDOW_FILL=( "false" "true" )
+SWEEP_WINDOW_SIZES=( 128 512 2048 )
+SWEEP_FILL_RATIOS=( "0.8" "0.95" )
+SWEEP_IO_SIZES=( "2G" "8G" )
+SWEEP_RW_MIX_READ=( "0.25" "0.5" "0.75" )
 
-SWEEP_IO_DEPTH=32
-SWEEP_EVICT_POLICY=0
+SWEEP_IO_DEPTH=64
+SWEEP_EVICT_POLICIES=( 0 1 2 3 )
 
 
 # =============================================================================
@@ -481,7 +482,9 @@ if [[ "$MODE" == "sweep" ]]; then
                     win_list=( "${SWEEP_WINDOW_SIZES[@]}" )
                   fi
                   for win in "${win_list[@]}"; do
-                    jobs_list+=( "$wl $cmt_b $bs $pol $wf $win $fill $ios $SWEEP_IO_DEPTH $rwmix $SWEEP_EVICT_POLICY" )
+                    for evict in "${SWEEP_EVICT_POLICIES[@]}"; do
+                      jobs_list+=( "$wl $cmt_b $bs $pol $wf $win $fill $ios $SWEEP_IO_DEPTH $rwmix $evict" )
+                    done
                   done
                 done
               done
